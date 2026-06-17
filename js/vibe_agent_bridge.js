@@ -1752,11 +1752,7 @@ C8O.agentBridge = C8O.agentBridge || {};
       var itemText = codexItemText(item);
       if (itemType === "agent_message") {
         if (itemText.length) {
-          pushEvent(entry, "answer/chunk", {
-            text: itemText,
-            item: item,
-            provider: "codex"
-          });
+          pushCodexProgress(entry, itemText, "commentary", "item");
         }
         return;
       }
