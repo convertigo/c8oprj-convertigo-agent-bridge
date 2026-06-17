@@ -1924,6 +1924,9 @@ C8O.agentBridge = C8O.agentBridge || {};
   function sessionFileLooksLikeEntry(file, entry) {
     try {
       var text = readTextFile(file);
+      if (entry && trim(entry.sessionId || entry.codexThreadId).length && text.indexOf(trim(entry.sessionId || entry.codexThreadId)) !== -1) {
+        return true;
+      }
       if (entry.handle && text.indexOf(entry.handle) !== -1) {
         return true;
       }
@@ -1932,6 +1935,59 @@ C8O.agentBridge = C8O.agentBridge || {};
       }
     } catch (_ignoreSessionProbe) {}
     return false;
+  }
+
+  function completeLineCount(file) {
+    var text = readTextFile(file);
+    if (!text.length) {
+      return 0;
+    }
+    var lines = text.split(/\r?\n/);
+    var completeLines = lines.length;
+    if (text.charAt(text.length - 1) !== "\n") {
+      completeLines--;
+    }
+    return completeLines < 0 ? 0 : completeLines;
+  }
+
+  function findCodexSessionFileById(entry) {
+    var sessionId = trim(entry && (entry.sessionId || entry.codexThreadId));
+    if (!sessionId.length) {
+      return null;
+    }
+    var best = null;
+    var bestModified = 0;
+    var roots = codexSessionRoots(entry);
+    for (var r = 0; r < roots.length; r++) {
+      var sessions = new File(roots[r], "sessions");
+      var stack = sessions.exists() ? [sessions] : [];
+      while (stack.length) {
+        var dir = stack.pop();
+        var files = dir.listFiles();
+        if (files === null) {
+          continue;
+        }
+        for (var i = 0; i < files.length; i++) {
+          var file = files[i];
+          if (file.isDirectory()) {
+            stack.push(file);
+            continue;
+          }
+          if (!file.isFile() || String(file.getName()).indexOf(".jsonl") === -1) {
+            continue;
+          }
+          if (String(file.getName()).indexOf(sessionId) === -1) {
+            continue;
+          }
+          var modified = Number(file.lastModified() || 0);
+          if (modified >= bestModified) {
+            best = file;
+            bestModified = modified;
+          }
+        }
+      }
+    }
+    return best;
   }
 
   function findCodexSessionFile(entry) {
@@ -2000,8 +2056,16 @@ C8O.agentBridge = C8O.agentBridge || {};
   }
 
   function startCodexSessionWatcher(entry) {
-    if (!entry || entry.protocol !== "codex-jsonl" || entry.codexSessionWatcherThread !== null) {
+    if (!entry || entry.protocol !== "codex-jsonl") {
       return;
+    }
+    if (entry.codexSessionWatcherThread !== null) {
+      try {
+        if (entry.codexSessionWatcherThread.isAlive()) {
+          return;
+        }
+      } catch (_ignoreWatcherAlive) {}
+      entry.codexSessionWatcherThread = null;
     }
     entry.codexSessionWatchStartedAt = now();
     var thread = new Thread(new Runnable({
@@ -2031,6 +2095,27 @@ C8O.agentBridge = C8O.agentBridge || {};
     thread.setDaemon(true);
     thread.start();
     entry.codexSessionWatcherThread = thread;
+  }
+
+  function prepareCodexSessionWatcherForPrompt(entry) {
+    if (!entry || entry.protocol !== "codex-jsonl") {
+      return;
+    }
+    entry.codexSeenLineKeys = {};
+    entry.codexSeenLineOrder = [];
+    entry.codexSessionWatchStartedAt = now();
+    entry.codexSessionFile = "";
+    entry.codexSessionFileLineCount = 0;
+    var file = findCodexSessionFileById(entry);
+    if (file !== null) {
+      entry.codexSessionFile = filePath(file);
+      entry.codexSessionFileLineCount = completeLineCount(file);
+      pushEvent(entry, "session/update", {
+        sessionFile: entry.codexSessionFile,
+        baselineLineCount: entry.codexSessionFileLineCount,
+        provider: "codex"
+      });
+    }
   }
 
   function sendAcpRequest(entry, method, params) {
@@ -2538,6 +2623,7 @@ C8O.agentBridge = C8O.agentBridge || {};
     });
 
     try {
+      prepareCodexSessionWatcherForPrompt(entry);
       startProcess(entry, env);
       try {
         if (entry.writer !== null) {
