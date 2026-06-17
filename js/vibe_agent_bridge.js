@@ -1231,6 +1231,9 @@ C8O.agentBridge = C8O.agentBridge || {};
       init: null,
       session: null,
       lastError: "",
+      lastCodexProgressMessage: "",
+      lastCodexAnswerChunk: "",
+      codexTurnEnded: false,
       closedAt: 0
     };
   }
@@ -1543,6 +1546,165 @@ C8O.agentBridge = C8O.agentBridge || {};
       itemType.indexOf("plan") >= 0;
   }
 
+  function codexContentText(content) {
+    if (content === null || typeof content === "undefined") {
+      return "";
+    }
+    if (typeof content === "string") {
+      return content;
+    }
+    if (Array.isArray && Array.isArray(content)) {
+      var parts = [];
+      for (var i = 0; i < content.length; i++) {
+        var part = codexContentText(content[i]);
+        if (part.length) {
+          parts.push(part);
+        }
+      }
+      return parts.join("\n");
+    }
+    if (content.text !== null && typeof content.text !== "undefined") {
+      return String(content.text);
+    }
+    if (content.output_text !== null && typeof content.output_text !== "undefined") {
+      return String(content.output_text);
+    }
+    if (content.input_text !== null && typeof content.input_text !== "undefined") {
+      return String(content.input_text);
+    }
+    if (content.message !== null && typeof content.message !== "undefined") {
+      return codexContentText(content.message);
+    }
+    if (content.content !== null && typeof content.content !== "undefined") {
+      return codexContentText(content.content);
+    }
+    return "";
+  }
+
+  function pushCodexProgress(entry, text, phase, source) {
+    text = trim(text);
+    if (!text.length || entry.lastCodexProgressMessage === text) {
+      return;
+    }
+    entry.lastCodexProgressMessage = text;
+    pushEvent(entry, "progress/message", {
+      text: text,
+      phase: phase || "commentary",
+      source: source || "codex",
+      provider: "codex"
+    });
+  }
+
+  function pushCodexAnswer(entry, text, source) {
+    text = trim(text);
+    if (!text.length || entry.lastCodexAnswerChunk === text) {
+      return;
+    }
+    entry.lastCodexAnswerChunk = text;
+    pushEvent(entry, "answer/chunk", {
+      text: text,
+      source: source || "codex",
+      provider: "codex"
+    });
+  }
+
+  function pushCodexTurnEnd(entry, data) {
+    if (entry.codexTurnEnded) {
+      return;
+    }
+    entry.codexTurnEnded = true;
+    entry.status = "completed";
+    entry.phase = "completed";
+    pushEvent(entry, "turn/end", data || {
+      provider: "codex",
+      threadId: entry.codexThreadId
+    });
+  }
+
+  function codexToolTitleFromInvocation(invocation) {
+    invocation = invocation || {};
+    var tool = trim(invocation.tool || invocation.name);
+    var server = trim(invocation.server);
+    if (server.length && tool.length) {
+      return server + "." + tool;
+    }
+    return tool.length ? tool : server;
+  }
+
+  function handleCodexEventMessage(entry, message) {
+    var payload = message.payload || {};
+    var payloadType = String(payload.type || "");
+    if (payloadType === "task_started") {
+      entry.status = "running";
+      entry.phase = "turn";
+      pushEvent(entry, "turn/start", { provider: "codex", threadId: entry.codexThreadId });
+      return true;
+    }
+    if (payloadType === "agent_message") {
+      var text = trim(payload.message || payload.text || codexContentText(payload.content));
+      var phase = String(payload.phase || "");
+      if (phase === "final_answer") {
+        pushCodexAnswer(entry, text, "event_msg");
+      } else {
+        pushCodexProgress(entry, text, phase, "event_msg");
+      }
+      return true;
+    }
+    if (payloadType === "mcp_tool_call_end") {
+      var status = payload.result && payload.result.Err ? "failed" : "completed";
+      pushEvent(entry, "tool/update", {
+        title: codexToolTitleFromInvocation(payload.invocation) || payload.call_id || "tool",
+        status: status,
+        callId: payload.call_id || "",
+        provider: "codex"
+      });
+      return true;
+    }
+    if (payloadType === "task_complete") {
+      pushCodexTurnEnd(entry, {
+        result: payload,
+        provider: "codex",
+        threadId: entry.codexThreadId
+      });
+      return true;
+    }
+    return false;
+  }
+
+  function handleCodexResponseItem(entry, message) {
+    var payload = message.payload || {};
+    var payloadType = String(payload.type || "");
+    if (payloadType === "function_call" || payloadType === "tool_search_call") {
+      pushEvent(entry, "tool/start", {
+        title: codexToolTitleFromInvocation(payload) || payload.name || payloadType,
+        status: "running",
+        callId: payload.call_id || "",
+        provider: "codex"
+      });
+      return true;
+    }
+    if (payloadType === "function_call_output" || payloadType === "tool_search_output") {
+      pushEvent(entry, "tool/update", {
+        title: payload.name || payload.call_id || payloadType,
+        status: "completed",
+        callId: payload.call_id || "",
+        provider: "codex"
+      });
+      return true;
+    }
+    if (payloadType === "message" && String(payload.role || "") === "assistant") {
+      var text = codexContentText(payload.content);
+      var phase = String(payload.phase || "");
+      if (phase === "final_answer") {
+        pushCodexAnswer(entry, text, "response_item");
+      } else if (phase === "commentary") {
+        pushCodexProgress(entry, text, phase, "response_item");
+      }
+      return true;
+    }
+    return false;
+  }
+
   function handleCodexLine(entry, line, streamName) {
     var text = trim(line);
     if (!text.length) {
@@ -1562,6 +1724,12 @@ C8O.agentBridge = C8O.agentBridge || {};
     }
 
     var type = String(message.type || "");
+    if (type === "event_msg" && handleCodexEventMessage(entry, message)) {
+      return;
+    }
+    if (type === "response_item" && handleCodexResponseItem(entry, message)) {
+      return;
+    }
     if (type === "thread.started") {
       entry.codexThreadId = String(message.thread_id || message.threadId || "");
       entry.sessionId = entry.codexThreadId;
@@ -1617,15 +1785,13 @@ C8O.agentBridge = C8O.agentBridge || {};
       return;
     }
     if (type === "turn.completed") {
-      entry.status = "completed";
-      entry.phase = "completed";
       if (message.usage) {
         pushEvent(entry, "usage/update", {
           usage: message.usage,
           provider: "codex"
         });
       }
-      pushEvent(entry, "turn/end", {
+      pushCodexTurnEnd(entry, {
         result: message,
         provider: "codex",
         threadId: entry.codexThreadId
@@ -2182,6 +2348,9 @@ C8O.agentBridge = C8O.agentBridge || {};
     var cursor = entry.nextIndex;
     entry.status = "starting";
     entry.phase = entry.sessionId.length ? "codex/resume" : "codex/exec";
+    entry.lastCodexProgressMessage = "";
+    entry.lastCodexAnswerChunk = "";
+    entry.codexTurnEnded = false;
     entry.command = codexCommand(entry.codexPath || "codex", entry, options, promptText);
     entry.envKeys = envKeys(env);
     pushEvent(entry, "turn/start", {
