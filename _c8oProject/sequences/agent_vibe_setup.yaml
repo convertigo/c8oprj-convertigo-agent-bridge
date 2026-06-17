@@ -34,8 +34,8 @@ comment: Check or install the local Vibe CLI runtime used by the agent bridge.
   comment: Set true to write the local VIBE_HOME config.toml with the Convertigo MCP HTTP endpoint.
   description: Set true to write the local VIBE_HOME config.toml with the Convertigo MCP HTTP endpoint.
 ↓workspaceRoot [variables.RequestableVariable-1781600000105]: 
-  comment: Optional Convertigo workspace root. Defaults to the parent folder of this project.
-  description: Optional Convertigo workspace root. Defaults to the parent folder of this project.
+  comment: Optional Convertigo user workspace root. Defaults to Engine.USER_WORKSPACE_PATH.
+  description: Optional Convertigo user workspace root. Defaults to Engine.USER_WORKSPACE_PATH.
 ↓installDir [variables.RequestableVariable-1781600000106]: 
   comment: Optional installation directory. Defaults to <workspaceRoot>/agents/vibe.
   description: Optional installation directory. Defaults to <workspaceRoot>/agents/vibe.
@@ -43,8 +43,8 @@ comment: Check or install the local Vibe CLI runtime used by the agent bridge.
   comment: Optional explicit VIBE_HOME directory. Overrides vibeHomeScope.
   description: Optional explicit VIBE_HOME directory. Overrides vibeHomeScope.
 ↓vibeHomeScope [variables.RequestableVariable-1781600000108]: 
-  comment: VIBE_HOME isolation scope: shared, user, or conversation. Defaults to shared.
-  description: VIBE_HOME isolation scope: shared, user, or conversation. Defaults to shared.
+  comment: 'VIBE_HOME isolation scope: shared, user, or conversation. Defaults to shared.'
+  description: 'VIBE_HOME isolation scope: shared, user, or conversation. Defaults to shared.'
 ↓userId [variables.RequestableVariable-1781600000109]: 
   comment: User identifier used for user or conversation scoped homes. The value is hashed in filesystem paths.
   description: User identifier used for user or conversation scoped homes. The value is hashed in filesystem paths.

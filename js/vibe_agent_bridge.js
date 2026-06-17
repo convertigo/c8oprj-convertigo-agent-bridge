@@ -143,6 +143,54 @@ C8O.agentBridge = C8O.agentBridge || {};
     Files.createDirectories(file.toPath());
   }
 
+  function normalizeWorkspaceRootPath(value) {
+    var text = trim(value);
+    if (!text.length) {
+      return "";
+    }
+    var root = new File(text);
+    var studioWorkspace = new File(root, ".metadata/.plugins/com.twinsoft.convertigo.studio");
+    if (studioWorkspace.isDirectory()) {
+      return filePath(studioWorkspace);
+    }
+    return filePath(root);
+  }
+
+  function engineWorkspaceRoot() {
+    try {
+      var workspace = normalizeWorkspaceRootPath(Packages.com.twinsoft.convertigo.engine.Engine.USER_WORKSPACE_PATH);
+      if (workspace.length) {
+        return workspace;
+      }
+    } catch (_ignoreEngineWorkspace) {}
+    try {
+      var propertyWorkspace = normalizeWorkspaceRootPath(System.getProperty("convertigo.cems.user_workspace_path"));
+      if (propertyWorkspace.length) {
+        return propertyWorkspace;
+      }
+    } catch (_ignoreEngineWorkspaceProperty) {}
+    return "";
+  }
+
+  function workspaceRootFromProjectDir(projectDir) {
+    if (projectDir === null || typeof projectDir === "undefined") {
+      return "";
+    }
+    var dir = projectDir && projectDir.getParentFile ? projectDir : new File(String(projectDir));
+    var parent = dir.getParentFile();
+    if (parent === null) {
+      return "";
+    }
+    var studioWorkspace = new File(parent, ".metadata/.plugins/com.twinsoft.convertigo.studio");
+    if (studioWorkspace.isDirectory()) {
+      return filePath(studioWorkspace);
+    }
+    if (String(parent.getName()) === "projects" && parent.getParentFile() !== null) {
+      return filePath(parent.getParentFile());
+    }
+    return "";
+  }
+
   function readTextFile(file) {
     if (!file.exists()) {
       return "";
@@ -204,24 +252,72 @@ C8O.agentBridge = C8O.agentBridge || {};
     return result;
   }
 
-  function defaultWorkspaceRoot() {
+  function projectWorkspaceRoot(projectName) {
+    var name = trim(projectName);
+    if (!name.length) {
+      return "";
+    }
+    try {
+      var project = Packages.com.twinsoft.convertigo.engine.Engine.theApp.databaseObjectsManager.getProjectByName(name);
+      if (project && project.getDirFile) {
+        var workspace = workspaceRootFromProjectDir(project.getDirFile());
+        if (workspace.length) {
+          return workspace;
+        }
+      }
+    } catch (_ignoreTargetProjectDir) {}
+    try {
+      var project2 = Packages.com.twinsoft.convertigo.engine.Engine.theApp.databaseObjectsManager.getProjectByName(name);
+      if (project2 && project2.getDirPath) {
+        var workspace2 = workspaceRootFromProjectDir(project2.getDirPath());
+        if (workspace2.length) {
+          return workspace2;
+        }
+      }
+    } catch (_ignoreTargetProjectPath) {}
+    return "";
+  }
+
+  function defaultWorkspaceRoot(projectName) {
+    var engineWorkspace = engineWorkspaceRoot();
+    if (engineWorkspace.length) {
+      return engineWorkspace;
+    }
+    var targetWorkspace = projectWorkspaceRoot(projectName);
+    if (targetWorkspace.length) {
+      return targetWorkspace;
+    }
     try {
       if (context && context.project && context.project.getDirFile) {
-        var parent = context.project.getDirFile().getParentFile();
-        if (parent !== null) {
-          return filePath(parent);
+        var contextWorkspace = workspaceRootFromProjectDir(context.project.getDirFile());
+        if (contextWorkspace.length) {
+          return contextWorkspace;
         }
       }
     } catch (_ignoreProjectDir) {}
     try {
       if (context && context.project && context.project.getDirPath) {
-        var parent2 = new File(String(context.project.getDirPath())).getParentFile();
-        if (parent2 !== null) {
-          return filePath(parent2);
+        var contextWorkspace2 = workspaceRootFromProjectDir(context.project.getDirPath());
+        if (contextWorkspace2.length) {
+          return contextWorkspace2;
         }
       }
     } catch (_ignoreProjectPath) {}
-    return filePath(new File(System.getProperty("user.home"), "git"));
+    return filePath(new File(System.getProperty("user.home"), "convertigo"));
+  }
+
+  function workspaceProjectName(options) {
+    options = options || {};
+    return trim(options.projectId || options.projectName || options.targetProject || options.primaryProject);
+  }
+
+  function resolveWorkspaceRoot(options) {
+    options = options || {};
+    var explicit = trim(options.workspaceRoot);
+    if (explicit.length) {
+      return normalizeWorkspaceRootPath(explicit);
+    }
+    return defaultWorkspaceRoot(workspaceProjectName(options));
   }
 
   function normalizeDirectory(value, fallback) {
@@ -640,7 +736,7 @@ C8O.agentBridge = C8O.agentBridge || {};
   }
 
   function detectRuntime(options) {
-    var workspaceRoot = normalizeDirectory(options.workspaceRoot, defaultWorkspaceRoot());
+    var workspaceRoot = resolveWorkspaceRoot(options);
     var installDir = normalizeDirectory(options.installDir, childPath(workspaceRoot, "agents/vibe"));
     var venvDir = childPath(installDir, ".venv");
     var binDir = childPath(venvDir, "bin");

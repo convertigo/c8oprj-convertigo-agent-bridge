@@ -36,8 +36,8 @@ comment: Start a long-running vibe-acp process and create an ACP session.
   comment: Optional stable process handle. Generated when empty and remembered in the HTTP session.
   description: Optional stable process handle. Generated when empty and remembered in the HTTP session.
 ↓workspaceRoot [variables.RequestableVariable-1781600000204]: 
-  comment: Optional Convertigo workspace root. Defaults to the parent folder of this project.
-  description: Optional Convertigo workspace root. Defaults to the parent folder of this project.
+  comment: Optional Convertigo user workspace root. Defaults to Engine.USER_WORKSPACE_PATH.
+  description: Optional Convertigo user workspace root. Defaults to Engine.USER_WORKSPACE_PATH.
 ↓installDir [variables.RequestableVariable-1781600000205]: 
   comment: Optional installation directory. Defaults to <workspaceRoot>/agents/vibe.
   description: Optional installation directory. Defaults to <workspaceRoot>/agents/vibe.
@@ -51,8 +51,8 @@ comment: Start a long-running vibe-acp process and create an ACP session.
   comment: Optional explicit VIBE_HOME. Overrides vibeHomeScope.
   description: Optional explicit VIBE_HOME. Overrides vibeHomeScope.
 ↓vibeHomeScope [variables.RequestableVariable-1781600000209]: 
-  comment: VIBE_HOME isolation scope: shared, user, or conversation. Defaults to shared.
-  description: VIBE_HOME isolation scope: shared, user, or conversation. Defaults to shared.
+  comment: 'VIBE_HOME isolation scope: shared, user, or conversation. Defaults to shared.'
+  description: 'VIBE_HOME isolation scope: shared, user, or conversation. Defaults to shared.'
 ↓userId [variables.RequestableVariable-1781600000210]: 
   comment: User identifier used for user or conversation scoped homes. The value is hashed in filesystem paths.
   description: User identifier used for user or conversation scoped homes. The value is hashed in filesystem paths.
@@ -63,8 +63,8 @@ comment: Start a long-running vibe-acp process and create an ACP session.
   comment: Optional project identifier included in user or conversation scoped homes.
   description: Optional project identifier included in user or conversation scoped homes.
 ↓credentialsPolicy [variables.RequestableVariable-1781600000213]: 
-  comment: Credential injection policy: explicit, user-home, vibe-home, or auto. Defaults to explicit.
-  description: Credential injection policy: explicit, user-home, vibe-home, or auto. Defaults to explicit.
+  comment: 'Credential injection policy: explicit, user-home, vibe-home, or auto. Defaults to explicit.'
+  description: 'Credential injection policy: explicit, user-home, vibe-home, or auto. Defaults to explicit.'
 ↓autoConfigure [variables.RequestableVariable-1781600000214]: 
   comment: Set false to avoid writing config.toml before start. Defaults to true when vibeHome is not explicit.
   description: Set false to avoid writing config.toml before start. Defaults to true when vibeHome is not explicit.
