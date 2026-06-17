@@ -1,0 +1,23 @@
+comment: Stop abandoned agent processes whose idle time exceeds their TTL.
+↓Run [steps.SimpleStep-1781600000701]: 
+  expression: |
+    'include("js/vibe_agent_bridge.js");
+    result = C8O.agentBridge.sweepExpired({
+      maxIdleSeconds: typeof maxIdleSeconds === "undefined" ? "" : maxIdleSeconds
+    });'
+↓result [steps.JsonToXmlStep-1781600000702]: 
+  jsonObject: 
+    - xmlizable: 
+      - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
+      - SmartType: 
+        - ↑mode: JS
+        - →→: result
+  key: 
+    - xmlizable: 
+      - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
+      - SmartType: 
+        - ↑mode: PLAIN
+        - →→: result
+↓maxIdleSeconds [variables.RequestableVariable-1781600000703]: 
+  comment: Optional hard idle threshold applied in addition to each process TTL.
+  description: Optional hard idle threshold applied in addition to each process TTL.

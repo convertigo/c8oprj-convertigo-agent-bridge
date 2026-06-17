@@ -1,0 +1,17 @@
+↑default: true
+comment: Void connector used only as the default project connector for HTTP sequence execution.
+jdbcDriverClassName: org.hsqldb.jdbcDriver
+jdbcURL: jdbc:hsqldb:file:.//hsqldb
+jdbcUserName: SA
+↓void [transactions.SqlTransaction]: 
+  ↑default: true
+  comment: Does nothing.
+  xmlGrouping: true
+  xmlOutput: 0
+  handlers: 
+    →: |
+      '
+      function onTransactionStarted() {
+          return "cancel";
+      }
+      '

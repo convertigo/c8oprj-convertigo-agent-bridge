@@ -1,0 +1,39 @@
+comment: Send a prompt to a running Vibe ACP session. By default the call returns after submit; poll agent_events for streaming chunks.
+↓Run [steps.SimpleStep-1781600000301]: 
+  expression: |
+    'include("js/vibe_agent_bridge.js");
+    result = C8O.agentBridge.vibePrompt({
+      handle: typeof handle === "undefined" ? "" : handle,
+      prompt: typeof prompt === "undefined" ? "" : prompt,
+      messageId: typeof messageId === "undefined" ? "" : messageId,
+      waitForCompletion: typeof waitForCompletion === "undefined" ? false : waitForCompletion,
+      requestTimeoutMs: typeof requestTimeoutMs === "undefined" ? "" : requestTimeoutMs
+    });'
+↓result [steps.JsonToXmlStep-1781600000302]: 
+  jsonObject: 
+    - xmlizable: 
+      - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
+      - SmartType: 
+        - ↑mode: JS
+        - →→: result
+  key: 
+    - xmlizable: 
+      - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
+      - SmartType: 
+        - ↑mode: PLAIN
+        - →→: result
+↓handle [variables.RequestableVariable-1781600000303]: 
+  comment: Process handle returned by agent_vibe_start. Defaults to the handle stored in the HTTP session.
+  description: Process handle returned by agent_vibe_start. Defaults to the handle stored in the HTTP session.
+↓prompt [variables.RequestableVariable-1781600000304]: 
+  comment: User prompt text sent as ACP text content.
+  description: User prompt text sent as ACP text content.
+↓messageId [variables.RequestableVariable-1781600000305]: 
+  comment: Optional UUID message id echoed by the agent when supported.
+  description: Optional UUID message id echoed by the agent when supported.
+↓waitForCompletion [variables.RequestableVariable-1781600000306]: 
+  comment: Set true for a blocking prompt call. Default false keeps HTTP responsive and streams through agent_events.
+  description: Set true for a blocking prompt call. Default false keeps HTTP responsive and streams through agent_events.
+↓requestTimeoutMs [variables.RequestableVariable-1781600000307]: 
+  comment: Timeout used only when waitForCompletion is true. Defaults to 600000.
+  description: Timeout used only when waitForCompletion is true. Defaults to 600000.

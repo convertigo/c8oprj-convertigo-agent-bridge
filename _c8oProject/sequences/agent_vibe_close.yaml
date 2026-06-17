@@ -1,0 +1,23 @@
+comment: Close a Vibe ACP session and stop its process.
+↓Run [steps.SimpleStep-1781600000601]: 
+  expression: |
+    'include("js/vibe_agent_bridge.js");
+    result = C8O.agentBridge.vibeClose({
+      handle: typeof handle === "undefined" ? "" : handle
+    });'
+↓result [steps.JsonToXmlStep-1781600000602]: 
+  jsonObject: 
+    - xmlizable: 
+      - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
+      - SmartType: 
+        - ↑mode: JS
+        - →→: result
+  key: 
+    - xmlizable: 
+      - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
+      - SmartType: 
+        - ↑mode: PLAIN
+        - →→: result
+↓handle [variables.RequestableVariable-1781600000603]: 
+  comment: Process handle returned by agent_vibe_start. Defaults to the handle stored in the HTTP session.
+  description: Process handle returned by agent_vibe_start. Defaults to the handle stored in the HTTP session.

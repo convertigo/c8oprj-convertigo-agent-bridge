@@ -1,0 +1,79 @@
+comment: Start a long-running vibe-acp process and create an ACP session.
+↓Run [steps.SimpleStep-1781600000201]: 
+  expression: |
+    'include("js/vibe_agent_bridge.js");
+    result = C8O.agentBridge.vibeStart({
+      handle: typeof handle === "undefined" ? "" : handle,
+      workspaceRoot: typeof workspaceRoot === "undefined" ? "" : workspaceRoot,
+      installDir: typeof installDir === "undefined" ? "" : installDir,
+      cwd: typeof cwd === "undefined" ? "" : cwd,
+      mcpEndpoint: typeof mcpEndpoint === "undefined" ? "" : mcpEndpoint,
+      vibeHome: typeof vibeHome === "undefined" ? "" : vibeHome,
+      vibeHomeScope: typeof vibeHomeScope === "undefined" ? "" : vibeHomeScope,
+      userId: typeof userId === "undefined" ? "" : userId,
+      conversationId: typeof conversationId === "undefined" ? "" : conversationId,
+      projectId: typeof projectId === "undefined" ? "" : projectId,
+      credentialsPolicy: typeof credentialsPolicy === "undefined" ? "" : credentialsPolicy,
+      autoConfigure: typeof autoConfigure === "undefined" ? "" : autoConfigure,
+      env: typeof env === "undefined" ? "" : env,
+      ttlSeconds: typeof ttlSeconds === "undefined" ? "" : ttlSeconds,
+      requestTimeoutMs: typeof requestTimeoutMs === "undefined" ? "" : requestTimeoutMs
+    });'
+↓result [steps.JsonToXmlStep-1781600000202]: 
+  jsonObject: 
+    - xmlizable: 
+      - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
+      - SmartType: 
+        - ↑mode: JS
+        - →→: result
+  key: 
+    - xmlizable: 
+      - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
+      - SmartType: 
+        - ↑mode: PLAIN
+        - →→: result
+↓handle [variables.RequestableVariable-1781600000203]: 
+  comment: Optional stable process handle. Generated when empty and remembered in the HTTP session.
+  description: Optional stable process handle. Generated when empty and remembered in the HTTP session.
+↓workspaceRoot [variables.RequestableVariable-1781600000204]: 
+  comment: Optional Convertigo workspace root. Defaults to the parent folder of this project.
+  description: Optional Convertigo workspace root. Defaults to the parent folder of this project.
+↓installDir [variables.RequestableVariable-1781600000205]: 
+  comment: Optional installation directory. Defaults to <workspaceRoot>/agents/vibe.
+  description: Optional installation directory. Defaults to <workspaceRoot>/agents/vibe.
+↓cwd [variables.RequestableVariable-1781600000206]: 
+  comment: Workspace directory the agent should work in. Defaults to the Convertigo workspace root.
+  description: Workspace directory the agent should work in. Defaults to the Convertigo workspace root.
+↓mcpEndpoint [variables.RequestableVariable-1781600000207]: 
+  comment: Convertigo MCP endpoint passed to ACP session/new.
+  description: Convertigo MCP endpoint passed to ACP session/new.
+↓vibeHome [variables.RequestableVariable-1781600000208]: 
+  comment: Optional explicit VIBE_HOME. Overrides vibeHomeScope.
+  description: Optional explicit VIBE_HOME. Overrides vibeHomeScope.
+↓vibeHomeScope [variables.RequestableVariable-1781600000209]: 
+  comment: VIBE_HOME isolation scope: shared, user, or conversation. Defaults to shared.
+  description: VIBE_HOME isolation scope: shared, user, or conversation. Defaults to shared.
+↓userId [variables.RequestableVariable-1781600000210]: 
+  comment: User identifier used for user or conversation scoped homes. The value is hashed in filesystem paths.
+  description: User identifier used for user or conversation scoped homes. The value is hashed in filesystem paths.
+↓conversationId [variables.RequestableVariable-1781600000211]: 
+  comment: Conversation identifier used for conversation scoped homes. Generated in the HTTP session when empty.
+  description: Conversation identifier used for conversation scoped homes. Generated in the HTTP session when empty.
+↓projectId [variables.RequestableVariable-1781600000212]: 
+  comment: Optional project identifier included in user or conversation scoped homes.
+  description: Optional project identifier included in user or conversation scoped homes.
+↓credentialsPolicy [variables.RequestableVariable-1781600000213]: 
+  comment: Credential injection policy: explicit, user-home, vibe-home, or auto. Defaults to explicit.
+  description: Credential injection policy: explicit, user-home, vibe-home, or auto. Defaults to explicit.
+↓autoConfigure [variables.RequestableVariable-1781600000214]: 
+  comment: Set false to avoid writing config.toml before start. Defaults to true when vibeHome is not explicit.
+  description: Set false to avoid writing config.toml before start. Defaults to true when vibeHome is not explicit.
+↓env [variables.RequestableVariable-1781600000215]: 
+  comment: Optional JSON object of environment variables for vibe-acp. Values are not echoed back.
+  description: Optional JSON object of environment variables for vibe-acp. Values are not echoed back.
+↓ttlSeconds [variables.RequestableVariable-1781600000216]: 
+  comment: Idle lifetime before sweep can close the process. Defaults to 3600.
+  description: Idle lifetime before sweep can close the process. Defaults to 3600.
+↓requestTimeoutMs [variables.RequestableVariable-1781600000217]: 
+  comment: ACP initialize/session timeout. Defaults to 60000.
+  description: ACP initialize/session timeout. Defaults to 60000.
