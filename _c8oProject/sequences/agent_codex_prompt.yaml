@@ -1,5 +1,5 @@
 comment: Send a prompt to Codex CLI through codex exec --json. Poll agent_events for normalized stream events.
-↓Run [steps.SimpleStep-1781693000301]:
+↓Run [steps.SimpleStep-1781693000301]: 
   expression: |
     'include("js/vibe_agent_bridge.js");
     result = C8O.agentBridge.codexPrompt({
@@ -12,40 +12,40 @@ comment: Send a prompt to Codex CLI through codex exec --json. Poll agent_events
       bypassApprovalsAndSandbox: typeof bypassApprovalsAndSandbox === "undefined" ? "" : bypassApprovalsAndSandbox,
       sandbox: typeof sandbox === "undefined" ? "" : sandbox
     });'
-↓result [steps.JsonToXmlStep-1781693000302]:
-  jsonObject:
-    - xmlizable:
+↓result [steps.JsonToXmlStep-1781693000302]: 
+  jsonObject: 
+    - xmlizable: 
       - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
-      - SmartType:
+      - SmartType: 
         - ↑mode: JS
         - →→: result
-  key:
-    - xmlizable:
+  key: 
+    - xmlizable: 
       - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
-      - SmartType:
+      - SmartType: 
         - ↑mode: PLAIN
         - →→: result
-↓handle [variables.RequestableVariable-1781693000303]:
+↓handle [variables.RequestableVariable-1781693000303]: 
   comment: Process handle returned by agent_codex_start.
   description: Process handle returned by agent_codex_start.
-↓prompt [variables.RequestableVariable-1781693000304]:
+↓prompt [variables.RequestableVariable-1781693000304]: 
   comment: User prompt text sent to codex exec.
   description: User prompt text sent to codex exec.
-↓codexThreadId [variables.RequestableVariable-1781693000305]:
+↓codexThreadId [variables.RequestableVariable-1781693000305]: 
   comment: Existing Codex thread id to resume.
   description: Existing Codex thread id to resume.
-↓sessionId [variables.RequestableVariable-1781693000306]:
+↓sessionId [variables.RequestableVariable-1781693000306]: 
   comment: Alias for codexThreadId.
   description: Alias for codexThreadId.
-↓externalSessionId [variables.RequestableVariable-1781693000307]:
+↓externalSessionId [variables.RequestableVariable-1781693000307]: 
   comment: Alias for codexThreadId used by the assistant state.
   description: Alias for codexThreadId used by the assistant state.
-↓model [variables.RequestableVariable-1781693000308]:
+↓model [variables.RequestableVariable-1781693000308]: 
   comment: Optional Codex model override.
   description: Optional Codex model override.
-↓bypassApprovalsAndSandbox [variables.RequestableVariable-1781693000309]:
+↓bypassApprovalsAndSandbox [variables.RequestableVariable-1781693000309]: 
   comment: Set false to avoid --dangerously-bypass-approvals-and-sandbox. Defaults to true for unattended Studio runs.
   description: Set false to avoid --dangerously-bypass-approvals-and-sandbox. Defaults to true for unattended Studio runs.
-↓sandbox [variables.RequestableVariable-1781693000310]:
+↓sandbox [variables.RequestableVariable-1781693000310]: 
   comment: Optional sandbox mode used only when bypassApprovalsAndSandbox is false.
   description: Optional sandbox mode used only when bypassApprovalsAndSandbox is false.

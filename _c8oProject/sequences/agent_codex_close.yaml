@@ -1,23 +1,23 @@
 comment: Close a Codex bridge entry and stop its running process if needed.
-↓Run [steps.SimpleStep-1781693000601]:
+↓Run [steps.SimpleStep-1781693000601]: 
   expression: |
     'include("js/vibe_agent_bridge.js");
     result = C8O.agentBridge.codexClose({
       handle: typeof handle === "undefined" ? "" : handle
     });'
-↓result [steps.JsonToXmlStep-1781693000602]:
-  jsonObject:
-    - xmlizable:
+↓result [steps.JsonToXmlStep-1781693000602]: 
+  jsonObject: 
+    - xmlizable: 
       - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
-      - SmartType:
+      - SmartType: 
         - ↑mode: JS
         - →→: result
-  key:
-    - xmlizable:
+  key: 
+    - xmlizable: 
       - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
-      - SmartType:
+      - SmartType: 
         - ↑mode: PLAIN
         - →→: result
-↓handle [variables.RequestableVariable-1781693000603]:
+↓handle [variables.RequestableVariable-1781693000603]: 
   comment: Process handle returned by agent_codex_start.
   description: Process handle returned by agent_codex_start.

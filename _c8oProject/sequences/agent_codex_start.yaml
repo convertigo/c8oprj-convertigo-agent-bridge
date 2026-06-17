@@ -1,5 +1,5 @@
 comment: Prepare a Codex CLI conversation entry. The Codex process is launched by agent_codex_prompt.
-↓Run [steps.SimpleStep-1781693000201]:
+↓Run [steps.SimpleStep-1781693000201]: 
   expression: |
     'include("js/vibe_agent_bridge.js");
     result = C8O.agentBridge.codexStart({
@@ -19,61 +19,61 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
       codexThreadId: typeof codexThreadId === "undefined" ? "" : codexThreadId,
       model: typeof model === "undefined" ? "" : model
     });'
-↓result [steps.JsonToXmlStep-1781693000202]:
-  jsonObject:
-    - xmlizable:
+↓result [steps.JsonToXmlStep-1781693000202]: 
+  jsonObject: 
+    - xmlizable: 
       - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
-      - SmartType:
+      - SmartType: 
         - ↑mode: JS
         - →→: result
-  key:
-    - xmlizable:
+  key: 
+    - xmlizable: 
       - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
-      - SmartType:
+      - SmartType: 
         - ↑mode: PLAIN
         - →→: result
-↓handle [variables.RequestableVariable-1781693000203]:
+↓handle [variables.RequestableVariable-1781693000203]: 
   comment: Optional stable process handle. Generated when empty and remembered in the HTTP session.
   description: Optional stable process handle. Generated when empty and remembered in the HTTP session.
-↓workspaceRoot [variables.RequestableVariable-1781693000204]:
+↓workspaceRoot [variables.RequestableVariable-1781693000204]: 
   comment: Optional Convertigo user workspace root. Defaults to Engine.USER_WORKSPACE_PATH.
   description: Optional Convertigo user workspace root. Defaults to Engine.USER_WORKSPACE_PATH.
-↓installDir [variables.RequestableVariable-1781693000205]:
+↓installDir [variables.RequestableVariable-1781693000205]: 
   comment: Optional installation directory. Defaults to <workspaceRoot>/agents/codex.
   description: Optional installation directory. Defaults to <workspaceRoot>/agents/codex.
-↓cwd [variables.RequestableVariable-1781693000206]:
+↓cwd [variables.RequestableVariable-1781693000206]: 
   comment: Workspace directory the agent should work in. Defaults to the Convertigo workspace root.
   description: Workspace directory the agent should work in. Defaults to the Convertigo workspace root.
-↓mcpEndpoint [variables.RequestableVariable-1781693000207]:
+↓mcpEndpoint [variables.RequestableVariable-1781693000207]: 
   comment: Convertigo MCP endpoint available through the user's Codex configuration.
   description: Convertigo MCP endpoint available through the user's Codex configuration.
-↓codexHome [variables.RequestableVariable-1781693000208]:
+↓codexHome [variables.RequestableVariable-1781693000208]: 
   comment: Optional explicit CODEX_HOME. Defaults to the user's configured Codex home.
   description: Optional explicit CODEX_HOME. Defaults to the user's configured Codex home.
-↓codexHomeScope [variables.RequestableVariable-1781693000209]:
+↓codexHomeScope [variables.RequestableVariable-1781693000209]: 
   comment: 'CODEX_HOME isolation scope: default, shared, user, or conversation. Defaults to default.'
   description: 'CODEX_HOME isolation scope: default, shared, user, or conversation. Defaults to default.'
-↓userId [variables.RequestableVariable-1781693000210]:
+↓userId [variables.RequestableVariable-1781693000210]: 
   comment: User identifier used for user or conversation scoped homes.
   description: User identifier used for user or conversation scoped homes.
-↓conversationId [variables.RequestableVariable-1781693000211]:
+↓conversationId [variables.RequestableVariable-1781693000211]: 
   comment: Conversation identifier used for conversation scoped homes.
   description: Conversation identifier used for conversation scoped homes.
-↓projectId [variables.RequestableVariable-1781693000212]:
+↓projectId [variables.RequestableVariable-1781693000212]: 
   comment: Optional project identifier included in scoped homes.
   description: Optional project identifier included in scoped homes.
-↓env [variables.RequestableVariable-1781693000213]:
+↓env [variables.RequestableVariable-1781693000213]: 
   comment: Optional JSON object of environment variables for codex exec. Values are not echoed back.
   description: Optional JSON object of environment variables for codex exec. Values are not echoed back.
-↓ttlSeconds [variables.RequestableVariable-1781693000214]:
+↓ttlSeconds [variables.RequestableVariable-1781693000214]: 
   comment: Idle lifetime before sweep can close the entry. Defaults to 3600.
   description: Idle lifetime before sweep can close the entry. Defaults to 3600.
-↓codexPath [variables.RequestableVariable-1781693000215]:
+↓codexPath [variables.RequestableVariable-1781693000215]: 
   comment: Optional Codex CLI executable path.
   description: Optional Codex CLI executable path.
-↓codexThreadId [variables.RequestableVariable-1781693000216]:
+↓codexThreadId [variables.RequestableVariable-1781693000216]: 
   comment: Existing Codex thread id to resume on the next prompt.
   description: Existing Codex thread id to resume on the next prompt.
-↓model [variables.RequestableVariable-1781700500217]:
+↓model [variables.RequestableVariable-1781700500217]: 
   comment: Optional Codex model override.
   description: Optional Codex model override.
