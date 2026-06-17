@@ -1216,6 +1216,12 @@ C8O.agentBridge = C8O.agentBridge || {};
       writer: null,
       stdoutThread: null,
       stderrThread: null,
+      codexSessionWatcherThread: null,
+      codexSessionFile: "",
+      codexSessionFileLineCount: 0,
+      codexSessionWatchStartedAt: 0,
+      codexSeenLineKeys: {},
+      codexSeenLineOrder: [],
       events: Collections.synchronizedList(new ArrayList()),
       firstIndex: 0,
       nextIndex: 0,
@@ -1451,7 +1457,7 @@ C8O.agentBridge = C8O.agentBridge || {};
     if (!text.length) {
       return;
     }
-    if (streamName !== "stdout") {
+    if (streamName !== "stdout" && streamName !== "codex-session") {
       pushEvent(entry, streamName, { line: text });
       return;
     }
@@ -1705,12 +1711,44 @@ C8O.agentBridge = C8O.agentBridge || {};
     return false;
   }
 
+  function codexLineKey(text) {
+    try {
+      return String(new java.lang.String(String(text)).hashCode()) + ":" + String(text.length);
+    } catch (_ignoreHash) {
+      return String(text.length) + ":" + String(text).substring(0, 80);
+    }
+  }
+
+  function markCodexLine(entry, text) {
+    if (!entry || !text.length) {
+      return false;
+    }
+    if (!entry.codexSeenLineKeys) {
+      entry.codexSeenLineKeys = {};
+      entry.codexSeenLineOrder = [];
+    }
+    var key = codexLineKey(text);
+    if (entry.codexSeenLineKeys[key] === true) {
+      return false;
+    }
+    entry.codexSeenLineKeys[key] = true;
+    entry.codexSeenLineOrder.push(key);
+    while (entry.codexSeenLineOrder.length > 12000) {
+      var oldKey = entry.codexSeenLineOrder.shift();
+      delete entry.codexSeenLineKeys[oldKey];
+    }
+    return true;
+  }
+
   function handleCodexLine(entry, line, streamName) {
     var text = trim(line);
     if (!text.length) {
       return;
     }
-    if (streamName !== "stdout") {
+    if (!markCodexLine(entry, text)) {
+      return;
+    }
+    if (streamName !== "stdout" && streamName !== "codex-session") {
       pushEvent(entry, streamName, { line: text });
       return;
     }
@@ -1854,6 +1892,147 @@ C8O.agentBridge = C8O.agentBridge || {};
     }
   }
 
+  function codexSessionDatePath(timeMillis) {
+    try {
+      return String(new java.text.SimpleDateFormat("yyyy/MM/dd").format(new java.util.Date(timeMillis || now())));
+    } catch (_ignoreDateFormat) {
+      return "";
+    }
+  }
+
+  function codexSessionRoots(entry) {
+    var roots = [];
+    var addRoot = function (path) {
+      path = trim(path);
+      if (!path.length) {
+        return;
+      }
+      for (var i = 0; i < roots.length; i++) {
+        if (roots[i] === path) {
+          return;
+        }
+      }
+      roots.push(path);
+    };
+    if (entry && entry.home && entry.home.path) {
+      addRoot(entry.home.path);
+    }
+    addRoot(childPath(String(System.getProperty("user.home")), ".codex"));
+    return roots;
+  }
+
+  function sessionFileLooksLikeEntry(file, entry) {
+    try {
+      var text = readTextFile(file);
+      if (entry.handle && text.indexOf(entry.handle) !== -1) {
+        return true;
+      }
+      if (entry.cwd && text.indexOf("\"cwd\":\"" + String(entry.cwd).replace(/\\/g, "\\\\").replace(/"/g, "\\\"") + "\"") !== -1) {
+        return true;
+      }
+    } catch (_ignoreSessionProbe) {}
+    return false;
+  }
+
+  function findCodexSessionFile(entry) {
+    var best = null;
+    var bestModified = 0;
+    var datePath = codexSessionDatePath(entry.codexSessionWatchStartedAt || entry.createdAt || now());
+    var roots = codexSessionRoots(entry);
+    var minModified = Number(entry.codexSessionWatchStartedAt || entry.createdAt || now()) - 60000;
+    for (var r = 0; r < roots.length; r++) {
+      var dir = new File(new File(roots[r], "sessions"), datePath);
+      var files = dir.exists() ? dir.listFiles() : null;
+      if (files === null) {
+        continue;
+      }
+      for (var i = 0; i < files.length; i++) {
+        var file = files[i];
+        if (!file.isFile() || String(file.getName()).indexOf(".jsonl") === -1) {
+          continue;
+        }
+        var modified = Number(file.lastModified() || 0);
+        if (modified < minModified || modified < bestModified) {
+          continue;
+        }
+        if (sessionFileLooksLikeEntry(file, entry)) {
+          best = file;
+          bestModified = modified;
+        }
+      }
+    }
+    return best;
+  }
+
+  function pollCodexSessionFile(entry) {
+    if (!entry || entry.protocol !== "codex-jsonl") {
+      return;
+    }
+    var file = trim(entry.codexSessionFile).length ? new File(entry.codexSessionFile) : null;
+    if (file === null || !file.exists()) {
+      file = findCodexSessionFile(entry);
+      if (file === null) {
+        return;
+      }
+      entry.codexSessionFile = filePath(file);
+      entry.codexSessionFileLineCount = 0;
+      pushEvent(entry, "session/update", {
+        sessionFile: entry.codexSessionFile,
+        provider: "codex"
+      });
+    }
+    var text = readTextFile(file);
+    if (!text.length) {
+      return;
+    }
+    var lines = text.split(/\r?\n/);
+    var completeLines = lines.length;
+    if (text.charAt(text.length - 1) !== "\n") {
+      completeLines--;
+    }
+    if (entry.codexSessionFileLineCount > completeLines) {
+      entry.codexSessionFileLineCount = 0;
+    }
+    for (var i = entry.codexSessionFileLineCount; i < completeLines; i++) {
+      handleCodexLine(entry, lines[i], "codex-session");
+    }
+    entry.codexSessionFileLineCount = completeLines;
+  }
+
+  function startCodexSessionWatcher(entry) {
+    if (!entry || entry.protocol !== "codex-jsonl" || entry.codexSessionWatcherThread !== null) {
+      return;
+    }
+    entry.codexSessionWatchStartedAt = now();
+    var thread = new Thread(new Runnable({
+      run: function () {
+        var pollsAfterExit = 0;
+        while (entry.status !== "closed") {
+          try {
+            pollCodexSessionFile(entry);
+          } catch (e) {
+            entry.lastError = String(e);
+            pushEvent(entry, "error", { message: String(e), phase: "codex_session_watcher" });
+          }
+          if (!processAlive(entry.process)) {
+            pollsAfterExit++;
+            if (pollsAfterExit > 6) {
+              break;
+            }
+          }
+          try {
+            Thread.sleep(500);
+          } catch (_ignoreWatcherSleep) {
+            break;
+          }
+        }
+      }
+    }), "ConvertigoAgentBridge-codex-session-" + entry.handle);
+    thread.setDaemon(true);
+    thread.start();
+    entry.codexSessionWatcherThread = thread;
+  }
+
   function sendAcpRequest(entry, method, params) {
     var id = entry.nextRequestId++;
     var pending = {
@@ -1937,6 +2116,7 @@ C8O.agentBridge = C8O.agentBridge || {};
       },
       sessionId: entry.sessionId,
       codexThreadId: entry.codexThreadId || "",
+      codexSessionFile: entry.codexSessionFile || "",
       createdAt: entry.createdAt,
       lastAccess: entry.lastAccess,
       idleMs: now() - entry.lastAccess,
@@ -1957,6 +2137,7 @@ C8O.agentBridge = C8O.agentBridge || {};
     entry.writer = new BufferedWriter(new OutputStreamWriter(entry.process.getOutputStream(), StandardCharsets.UTF_8));
     entry.stdoutThread = startReaderThread(entry, entry.process.getInputStream(), "stdout");
     entry.stderrThread = startReaderThread(entry, entry.process.getErrorStream(), "stderr");
+    startCodexSessionWatcher(entry);
   }
 
   C8O.agentBridge.vibeStart = function (options) {
