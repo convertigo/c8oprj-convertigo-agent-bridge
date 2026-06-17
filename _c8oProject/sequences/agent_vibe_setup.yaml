@@ -1,5 +1,5 @@
 comment: Check or install the local Vibe CLI runtime used by the agent bridge.
-↓Run [steps.SimpleStep-1781600000101]: 
+↓Run [steps.SimpleStep-1781600000101]:
   expression: |
     'include("js/vibe_agent_bridge.js");
     result = C8O.agentBridge.vibeSetup({
@@ -12,48 +12,52 @@ comment: Check or install the local Vibe CLI runtime used by the agent bridge.
       userId: typeof userId === "undefined" ? "" : userId,
       conversationId: typeof conversationId === "undefined" ? "" : conversationId,
       projectId: typeof projectId === "undefined" ? "" : projectId,
-      mcpEndpoint: typeof mcpEndpoint === "undefined" ? "" : mcpEndpoint
+      mcpEndpoint: typeof mcpEndpoint === "undefined" ? "" : mcpEndpoint,
+      model: typeof model === "undefined" ? "" : model
     });'
-↓result [steps.JsonToXmlStep-1781600000102]: 
-  jsonObject: 
-    - xmlizable: 
+↓result [steps.JsonToXmlStep-1781600000102]:
+  jsonObject:
+    - xmlizable:
       - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
-      - SmartType: 
+      - SmartType:
         - ↑mode: JS
         - →→: result
-  key: 
-    - xmlizable: 
+  key:
+    - xmlizable:
       - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
-      - SmartType: 
+      - SmartType:
         - ↑mode: PLAIN
         - →→: result
-↓install [variables.RequestableVariable-1781600000103]: 
+↓install [variables.RequestableVariable-1781600000103]:
   comment: Set true to create a workspace-local Python venv and install mistral-vibe when missing.
   description: Set true to create a workspace-local Python venv and install mistral-vibe when missing.
-↓configure [variables.RequestableVariable-1781600000104]: 
+↓configure [variables.RequestableVariable-1781600000104]:
   comment: Set true to write the local VIBE_HOME config.toml with the Convertigo MCP HTTP endpoint.
   description: Set true to write the local VIBE_HOME config.toml with the Convertigo MCP HTTP endpoint.
-↓workspaceRoot [variables.RequestableVariable-1781600000105]: 
+↓workspaceRoot [variables.RequestableVariable-1781600000105]:
   comment: Optional Convertigo user workspace root. Defaults to Engine.USER_WORKSPACE_PATH.
   description: Optional Convertigo user workspace root. Defaults to Engine.USER_WORKSPACE_PATH.
-↓installDir [variables.RequestableVariable-1781600000106]: 
+↓installDir [variables.RequestableVariable-1781600000106]:
   comment: Optional installation directory. Defaults to <workspaceRoot>/agents/vibe.
   description: Optional installation directory. Defaults to <workspaceRoot>/agents/vibe.
-↓vibeHome [variables.RequestableVariable-1781600000107]: 
+↓vibeHome [variables.RequestableVariable-1781600000107]:
   comment: Optional explicit VIBE_HOME directory. Overrides vibeHomeScope.
   description: Optional explicit VIBE_HOME directory. Overrides vibeHomeScope.
-↓vibeHomeScope [variables.RequestableVariable-1781600000108]: 
+↓vibeHomeScope [variables.RequestableVariable-1781600000108]:
   comment: 'VIBE_HOME isolation scope: shared, user, or conversation. Defaults to shared.'
   description: 'VIBE_HOME isolation scope: shared, user, or conversation. Defaults to shared.'
-↓userId [variables.RequestableVariable-1781600000109]: 
+↓userId [variables.RequestableVariable-1781600000109]:
   comment: User identifier used for user or conversation scoped homes. The value is hashed in filesystem paths.
   description: User identifier used for user or conversation scoped homes. The value is hashed in filesystem paths.
-↓conversationId [variables.RequestableVariable-1781600000110]: 
+↓conversationId [variables.RequestableVariable-1781600000110]:
   comment: Conversation identifier used for conversation scoped homes. Generated in the HTTP session when empty.
   description: Conversation identifier used for conversation scoped homes. Generated in the HTTP session when empty.
-↓projectId [variables.RequestableVariable-1781600000111]: 
+↓projectId [variables.RequestableVariable-1781600000111]:
   comment: Optional project identifier included in user or conversation scoped homes.
   description: Optional project identifier included in user or conversation scoped homes.
-↓mcpEndpoint [variables.RequestableVariable-1781600000112]: 
+↓mcpEndpoint [variables.RequestableVariable-1781600000112]:
   comment: Optional Convertigo MCP endpoint. Defaults to http://localhost:18082/convertigo/api/mcp.
   description: Optional Convertigo MCP endpoint. Defaults to http://localhost:18082/convertigo/api/mcp.
+↓model [variables.RequestableVariable-1781700500113]:
+  comment: Optional Vibe model alias. Defaults to vibe-thinking.
+  description: Optional Vibe model alias. Defaults to vibe-thinking.

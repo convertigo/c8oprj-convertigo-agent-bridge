@@ -16,7 +16,8 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
       env: typeof env === "undefined" ? "" : env,
       ttlSeconds: typeof ttlSeconds === "undefined" ? "" : ttlSeconds,
       codexPath: typeof codexPath === "undefined" ? "" : codexPath,
-      codexThreadId: typeof codexThreadId === "undefined" ? "" : codexThreadId
+      codexThreadId: typeof codexThreadId === "undefined" ? "" : codexThreadId,
+      model: typeof model === "undefined" ? "" : model
     });'
 ↓result [steps.JsonToXmlStep-1781693000202]:
   jsonObject:
@@ -73,3 +74,6 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
 ↓codexThreadId [variables.RequestableVariable-1781693000216]:
   comment: Existing Codex thread id to resume on the next prompt.
   description: Existing Codex thread id to resume on the next prompt.
+↓model [variables.RequestableVariable-1781700500217]:
+  comment: Optional Codex model override.
+  description: Optional Codex model override.
