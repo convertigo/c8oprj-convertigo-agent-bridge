@@ -345,6 +345,37 @@ C8O.agentBridge = C8O.agentBridge || {};
     return "shared";
   }
 
+  function normalizeCodexHomeScope(value) {
+    var scope = trim(value).toLowerCase();
+    if (!scope.length) {
+      return "default";
+    }
+    if (scope === "none" || scope === "user-home" || scope === "user_home" || scope === "home") {
+      return "default";
+    }
+    if (scope === "conv" || scope === "chat" || scope === "thread") {
+      return "conversation";
+    }
+    if (scope === "global" || scope === "studio") {
+      return "shared";
+    }
+    if (scope === "explicit" || scope === "default" || scope === "shared" || scope === "user" || scope === "conversation") {
+      return scope;
+    }
+    return "default";
+  }
+
+  function normalizeProvider(value) {
+    var provider = trim(value).toLowerCase();
+    if (provider === "codex-cli" || provider === "openai-codex") {
+      return "codex";
+    }
+    if (provider === "mistral-vibe" || provider === "vibe-acp") {
+      return "vibe";
+    }
+    return provider.length ? provider.replace(/[^a-z0-9_.-]/g, "_") : "vibe";
+  }
+
   function stableId(prefix, value) {
     var text = trim(value) || "default";
     var uuid = UUID.nameUUIDFromBytes(new java.lang.String(text).getBytes(StandardCharsets.UTF_8));
@@ -500,6 +531,94 @@ C8O.agentBridge = C8O.agentBridge || {};
     };
   }
 
+  function resolveCodexHome(options, installDir) {
+    options = options || {};
+    var explicit = trim(options.codexHome || options.agentHome);
+    if (explicit.length) {
+      return {
+        scope: "explicit",
+        path: filePath(new File(explicit)),
+        explicit: true,
+        userId: trim(options.userId),
+        conversationId: trim(options.conversationId),
+        projectId: trim(options.projectId),
+        error: ""
+      };
+    }
+
+    var scope = normalizeCodexHomeScope(options.codexHomeScope || options.homeScope || options.scope);
+    var project = projectId(options);
+    if (scope === "default") {
+      return {
+        scope: "default",
+        path: "",
+        explicit: false,
+        userId: "",
+        conversationId: "",
+        projectId: project,
+        error: ""
+      };
+    }
+    if (scope === "shared") {
+      return {
+        scope: "shared",
+        path: childPath(installDir, ".codex-home"),
+        explicit: false,
+        userId: "",
+        conversationId: "",
+        projectId: project,
+        error: ""
+      };
+    }
+
+    var root = childPath(installDir, "homes");
+    var user = trim(options.userId) || contextUserId();
+    if (scope === "user") {
+      if (!user.length) {
+        return {
+          scope: "user",
+          path: "",
+          explicit: false,
+          userId: "",
+          conversationId: "",
+          projectId: project,
+          error: "userId is required for user scoped CODEX_HOME"
+        };
+      }
+      var userBase = childPath(childPath(root, "users"), stableId("user", user));
+      userBase = appendProjectPath(userBase, project);
+      return {
+        scope: "user",
+        path: childPath(userBase, ".codex-home"),
+        explicit: false,
+        userId: user,
+        conversationId: "",
+        projectId: project,
+        error: ""
+      };
+    }
+
+    var conv = conversationId(options);
+    var convBase;
+    if (user.length) {
+      convBase = childPath(childPath(root, "users"), stableId("user", user));
+      convBase = appendProjectPath(convBase, project);
+      convBase = childPath(childPath(convBase, "conversations"), stableId("conversation", conv));
+    } else {
+      convBase = childPath(childPath(root, "conversations"), stableId("conversation", conv));
+      convBase = appendProjectPath(convBase, project);
+    }
+    return {
+      scope: "conversation",
+      path: childPath(convBase, ".codex-home"),
+      explicit: false,
+      userId: user,
+      conversationId: conv,
+      projectId: project,
+      error: ""
+    };
+  }
+
   function getServerStore() {
     try {
       if (context && context.server) {
@@ -565,8 +684,8 @@ C8O.agentBridge = C8O.agentBridge || {};
     return "";
   }
 
-  function makeHandle() {
-    return "vibe-" + String(now()) + "-" + String(UUID.randomUUID()).substring(0, 8);
+  function makeHandle(provider) {
+    return normalizeProvider(provider) + "-" + String(now()) + "-" + String(UUID.randomUUID()).substring(0, 8);
   }
 
   function runCommand(args, options) {
@@ -805,6 +924,52 @@ C8O.agentBridge = C8O.agentBridge || {};
     };
   }
 
+  function detectCodexRuntime(options) {
+    options = options || {};
+    var workspaceRoot = resolveWorkspaceRoot(options);
+    var installDir = normalizeDirectory(options.installDir, childPath(workspaceRoot, "agents/codex"));
+    var codexHome = resolveCodexHome(options, installDir);
+    var userHome = String(System.getProperty("user.home"));
+    var command = firstWorkingCommand([
+      trim(options.codexPath || options.commandPath),
+      "/Applications/Codex.app/Contents/Resources/codex",
+      childPath(childPath(userHome, ".local"), "bin/codex"),
+      "/opt/homebrew/bin/codex",
+      "/usr/local/bin/codex",
+      "codex"
+    ], ["--version"]);
+    var mcp = {
+      checked: false,
+      ok: false,
+      hasConvertigo: false,
+      stdout: "",
+      stderr: "",
+      error: ""
+    };
+    if (command.found) {
+      var env = {};
+      if (codexHome.path.length) {
+        env.CODEX_HOME = codexHome.path;
+      }
+      var mcpProbe = runCommand([command.path, "mcp", "list"], { timeoutMs: 15000, env: env });
+      mcp.checked = true;
+      mcp.ok = mcpProbe.ok;
+      mcp.stdout = mcpProbe.stdout;
+      mcp.stderr = mcpProbe.stderr;
+      mcp.error = mcpProbe.error;
+      mcp.hasConvertigo = (mcpProbe.stdout || "").indexOf("convertigo") >= 0 || (mcpProbe.stderr || "").indexOf("convertigo") >= 0;
+    }
+    return {
+      workspaceRoot: workspaceRoot,
+      installDir: installDir,
+      codexHome: codexHome.path,
+      home: publicHomeInfo(codexHome),
+      mcpEndpoint: trim(options.mcpEndpoint) || DEFAULT_MCP_ENDPOINT,
+      codex: command,
+      mcp: mcp
+    };
+  }
+
   function envKeys(env) {
     var keys = [];
     for (var key in env) {
@@ -947,6 +1112,34 @@ C8O.agentBridge = C8O.agentBridge || {};
     };
   };
 
+  C8O.agentBridge.codexSetup = function (options) {
+    options = options || {};
+    var setup = detectCodexRuntime(options);
+    var messages = [];
+    if (setup.home.error) {
+      messages.push(setup.home.error);
+    }
+    if (setup.home.path.length && !new File(setup.home.path).exists()) {
+      try {
+        ensureDirectory(new File(setup.home.path));
+        messages.push("CODEX_HOME directory created: " + setup.home.path);
+      } catch (e) {
+        messages.push(String(e));
+      }
+      setup = detectCodexRuntime(options);
+    }
+    if (setup.codex.found && setup.home.path.length && !setup.mcp.hasConvertigo) {
+      messages.push("Scoped CODEX_HOME does not currently list the Convertigo MCP server; default CODEX_HOME usually keeps the user's configured Codex auth and MCP servers.");
+    }
+    return {
+      ok: setup.codex.found && !setup.home.error.length,
+      status: setup.codex.found ? "ready" : "missing",
+      setup: setup,
+      messages: messages,
+      timestamp: now()
+    };
+  };
+
   function publicHomeInfo(home) {
     home = home || {};
     return {
@@ -960,11 +1153,11 @@ C8O.agentBridge = C8O.agentBridge || {};
     };
   }
 
-  function createEntry(handle, command, cwd, env, ttlMillis, home, credentials) {
+  function createEntry(handle, provider, protocol, command, cwd, env, ttlMillis, home, credentials) {
     return {
       handle: handle,
-      provider: "vibe",
-      protocol: "acp",
+      provider: normalizeProvider(provider),
+      protocol: protocol || "acp",
       command: command.slice(0),
       cwd: cwd,
       envKeys: envKeys(env),
@@ -985,6 +1178,7 @@ C8O.agentBridge = C8O.agentBridge || {};
       status: "starting",
       phase: "spawn",
       sessionId: "",
+      codexThreadId: "",
       init: null,
       session: null,
       lastError: "",
@@ -1260,6 +1454,157 @@ C8O.agentBridge = C8O.agentBridge || {};
     pushEvent(entry, "acp/message", { message: message });
   }
 
+  function codexItemText(item) {
+    if (!item) {
+      return "";
+    }
+    if (item.text !== null && typeof item.text !== "undefined") {
+      return String(item.text);
+    }
+    if (item.content !== null && typeof item.content !== "undefined") {
+      return extractContentText(item.content);
+    }
+    if (item.message !== null && typeof item.message !== "undefined") {
+      return extractContentText(item.message);
+    }
+    if (item.delta !== null && typeof item.delta !== "undefined") {
+      return extractContentText(item.delta);
+    }
+    return "";
+  }
+
+  function codexItemTitle(item) {
+    if (!item) {
+      return "";
+    }
+    return String(item.title || item.name || item.command || item.type || "");
+  }
+
+  function isCodexToolItem(itemType) {
+    return itemType.indexOf("tool") >= 0 ||
+      itemType.indexOf("command") >= 0 ||
+      itemType.indexOf("exec") >= 0 ||
+      itemType.indexOf("function") >= 0 ||
+      itemType.indexOf("mcp") >= 0;
+  }
+
+  function isCodexReasoningItem(itemType) {
+    return itemType.indexOf("reason") >= 0 ||
+      itemType.indexOf("thought") >= 0 ||
+      itemType.indexOf("plan") >= 0;
+  }
+
+  function handleCodexLine(entry, line, streamName) {
+    var text = trim(line);
+    if (!text.length) {
+      return;
+    }
+    if (streamName !== "stdout") {
+      pushEvent(entry, streamName, { line: text });
+      return;
+    }
+
+    var message;
+    try {
+      message = JSON.parse(text);
+    } catch (_ignoreCodexJson) {
+      pushEvent(entry, "diagnostic", { line: text });
+      return;
+    }
+
+    var type = String(message.type || "");
+    if (type === "thread.started") {
+      entry.codexThreadId = String(message.thread_id || message.threadId || "");
+      entry.sessionId = entry.codexThreadId;
+      pushEvent(entry, "session/update", {
+        sessionId: entry.sessionId,
+        threadId: entry.codexThreadId,
+        provider: "codex"
+      });
+      return;
+    }
+    if (type === "turn.started") {
+      entry.status = "running";
+      entry.phase = "turn";
+      pushEvent(entry, "turn/start", { provider: "codex", threadId: entry.codexThreadId });
+      return;
+    }
+    if (type === "item.started" || type === "item.updated" || type === "item.completed") {
+      var item = message.item || {};
+      var itemType = String(item.type || "").toLowerCase();
+      var itemText = codexItemText(item);
+      if (itemType === "agent_message") {
+        if (itemText.length) {
+          pushEvent(entry, "answer/chunk", {
+            text: itemText,
+            item: item,
+            provider: "codex"
+          });
+        }
+        return;
+      }
+      if (isCodexReasoningItem(itemType)) {
+        if (itemText.length) {
+          pushEvent(entry, "reasoning/chunk", {
+            text: itemText,
+            item: item,
+            provider: "codex"
+          });
+        } else {
+          pushEvent(entry, "codex/item", { eventType: type, item: item });
+        }
+        return;
+      }
+      if (isCodexToolItem(itemType)) {
+        pushEvent(entry, type === "item.started" ? "tool/start" : "tool/update", {
+          title: codexItemTitle(item),
+          status: type === "item.completed" ? "completed" : "running",
+          item: item,
+          provider: "codex"
+        });
+        return;
+      }
+      pushEvent(entry, "codex/item", { eventType: type, item: item });
+      return;
+    }
+    if (type === "turn.completed") {
+      entry.status = "completed";
+      entry.phase = "completed";
+      if (message.usage) {
+        pushEvent(entry, "usage/update", {
+          usage: message.usage,
+          provider: "codex"
+        });
+      }
+      pushEvent(entry, "turn/end", {
+        result: message,
+        provider: "codex",
+        threadId: entry.codexThreadId
+      });
+      return;
+    }
+    if (type === "turn.failed" || type === "error") {
+      entry.status = "error";
+      entry.phase = "error";
+      entry.lastError = JSON.stringify(message);
+      pushEvent(entry, "turn/error", {
+        error: message,
+        provider: "codex"
+      });
+      return;
+    }
+
+    pushEvent(entry, "codex/event", { event: message });
+  }
+
+  function handleProcessLine(entry, line, streamName) {
+    if (entry.protocol === "codex-jsonl") {
+      handleCodexLine(entry, line, streamName);
+      return;
+    }
+    handleAcpLine(entry, line, streamName);
+  }
+
   function startReaderThread(entry, stream, streamName) {
     var reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8));
     var thread = new Thread(new Runnable({
@@ -1267,7 +1612,7 @@ C8O.agentBridge = C8O.agentBridge || {};
         try {
           var line;
           while ((line = reader.readLine()) !== null) {
-            handleAcpLine(entry, String(line), streamName);
+            handleProcessLine(entry, String(line), streamName);
           }
         } catch (e) {
           if (entry.status !== "closed") {
@@ -1275,7 +1620,7 @@ C8O.agentBridge = C8O.agentBridge || {};
             pushEvent(entry, "error", { message: String(e), phase: streamName + "_reader" });
           }
         } finally {
-          if (streamName === "stdout" && entry.status !== "closed" && !processAlive(entry.process)) {
+          if (streamName === "stdout" && entry.status !== "closed" && entry.status !== "completed" && !processAlive(entry.process)) {
             entry.status = entry.status === "error" ? "error" : "exited";
             entry.closedAt = now();
             pushEvent(entry, "system/exit", {
@@ -1358,7 +1703,7 @@ C8O.agentBridge = C8O.agentBridge || {};
   }
 
   function statusOf(entry) {
-    if (entry.status !== "closed" && entry.status !== "error" && entry.status !== "exited" && !processAlive(entry.process)) {
+    if (entry.process !== null && entry.status !== "closed" && entry.status !== "completed" && entry.status !== "error" && entry.status !== "exited" && !processAlive(entry.process)) {
       entry.status = "exited";
       entry.closedAt = entry.closedAt || now();
     }
@@ -1379,6 +1724,7 @@ C8O.agentBridge = C8O.agentBridge || {};
         injectedKeys: entry.credentials.injectedKeys
       },
       sessionId: entry.sessionId,
+      codexThreadId: entry.codexThreadId || "",
       createdAt: entry.createdAt,
       lastAccess: entry.lastAccess,
       idleMs: now() - entry.lastAccess,
@@ -1427,7 +1773,7 @@ C8O.agentBridge = C8O.agentBridge || {};
       };
     }
 
-    var handle = trim(options.handle) || makeHandle();
+    var handle = trim(options.handle) || makeHandle("vibe");
     var registry = getRegistry();
     var existing = registry.get(handle);
     if (existing !== null && typeof existing !== "undefined" && processAlive(existing.process)) {
@@ -1452,7 +1798,7 @@ C8O.agentBridge = C8O.agentBridge || {};
     var command = parseCommand(options.command, [setup.setup.vibeAcp.path || "vibe-acp"]);
     var ttlMillis = intValue(options.ttlSeconds, DEFAULT_TTL_SECONDS, 30, 86400) * 1000;
     var timeoutMs = intValue(options.requestTimeoutMs, 60000, 1000, 600000);
-    var entry = createEntry(handle, command, cwd, env, ttlMillis, setup.setup.home, credentials);
+    var entry = createEntry(handle, "vibe", "acp", command, cwd, env, ttlMillis, setup.setup.home, credentials);
     registry.put(handle, entry);
 
     try {
@@ -1614,6 +1960,239 @@ C8O.agentBridge = C8O.agentBridge || {};
         timestamp: now()
       };
     }
+  };
+
+  function codexCredentials(options, home) {
+    var scope = home && home.path ? "scoped-home" : "default-home";
+    return {
+      policy: scope,
+      sources: [{
+        source: scope,
+        path: home && home.path ? home.path : childPath(String(System.getProperty("user.home")), ".codex"),
+        exists: home && home.path ? new File(home.path).exists() : new File(childPath(String(System.getProperty("user.home")), ".codex")).exists(),
+        keys: [],
+        injectedKeys: []
+      }],
+      injectedKeys: []
+    };
+  }
+
+  function codexCommand(baseCommand, entry, options, promptText) {
+    var command = parseCommand(options.command, [baseCommand || "codex"]);
+    var model = trim(options.model);
+    var bypass = boolValue(options.bypassApprovalsAndSandbox, true);
+    var sandbox = trim(options.sandbox);
+    if (entry.sessionId.length) {
+      command.push("exec");
+      command.push("resume");
+      command.push("--json");
+      if (bypass) {
+        command.push("--dangerously-bypass-approvals-and-sandbox");
+      }
+      if (model.length) {
+        command.push("-m");
+        command.push(model);
+      }
+      command.push("--skip-git-repo-check");
+      command.push(entry.sessionId);
+      command.push(promptText);
+      return command;
+    }
+
+    command.push("exec");
+    command.push("--json");
+    if (bypass) {
+      command.push("--dangerously-bypass-approvals-and-sandbox");
+    } else if (sandbox.length) {
+      command.push("-s");
+      command.push(sandbox);
+    }
+    if (model.length) {
+      command.push("-m");
+      command.push(model);
+    }
+    command.push("--skip-git-repo-check");
+    command.push("-C");
+    command.push(entry.cwd);
+    command.push(promptText);
+    return command;
+  }
+
+  C8O.agentBridge.codexStart = function (options) {
+    options = options || {};
+    var setup = C8O.agentBridge.codexSetup({
+      workspaceRoot: options.workspaceRoot,
+      installDir: options.installDir,
+      codexHome: options.codexHome || options.agentHome,
+      codexHomeScope: options.codexHomeScope || options.homeScope || options.scope,
+      userId: options.userId,
+      conversationId: options.conversationId,
+      projectId: options.projectId,
+      mcpEndpoint: options.mcpEndpoint,
+      codexPath: options.codexPath || options.commandPath
+    });
+    if (!setup.ok) {
+      return {
+        ok: false,
+        status: "error",
+        phase: "setup",
+        error: "codex CLI is required before start",
+        setup: setup,
+        timestamp: now()
+      };
+    }
+
+    var handle = trim(options.handle) || makeHandle("codex");
+    var registry = getRegistry();
+    var existing = registry.get(handle);
+    if (existing !== null && typeof existing !== "undefined" && processAlive(existing.process)) {
+      rememberSessionHandle(handle);
+      return {
+        ok: true,
+        status: "already_running",
+        handle: handle,
+        state: statusOf(existing),
+        timestamp: now()
+      };
+    }
+
+    var env = parseObject(options.env, {});
+    if (setup.setup.codexHome.length) {
+      env.CODEX_HOME = setup.setup.codexHome;
+    }
+    env.TERM = env.TERM || "xterm-256color";
+    var cwd = normalizeDirectory(options.cwd, setup.setup.workspaceRoot);
+    var ttlMillis = intValue(options.ttlSeconds, DEFAULT_TTL_SECONDS, 30, 86400) * 1000;
+    var credentials = codexCredentials(options, setup.setup.home);
+    var entry = createEntry(handle, "codex", "codex-jsonl", [], cwd, env, ttlMillis, setup.setup.home, credentials);
+    entry.status = "ready";
+    entry.phase = "ready";
+    entry.sessionId = trim(options.codexThreadId || options.sessionId || options.externalSessionId);
+    entry.codexThreadId = entry.sessionId;
+    entry.codexPath = setup.setup.codex.path || "codex";
+    registry.put(handle, entry);
+    rememberSessionHandle(handle);
+    pushEvent(entry, "system/start", {
+      handle: handle,
+      provider: "codex",
+      protocol: "codex-jsonl",
+      cwd: cwd,
+      codexHome: setup.setup.codexHome,
+      home: publicHomeInfo(setup.setup.home),
+      resumedThreadId: entry.codexThreadId,
+      mcp: setup.setup.mcp
+    });
+
+    return {
+      ok: true,
+      status: "started",
+      handle: handle,
+      sessionId: entry.sessionId,
+      codexThreadId: entry.codexThreadId,
+      cursor: entry.nextIndex,
+      state: statusOf(entry),
+      setup: setup,
+      timestamp: now()
+    };
+  };
+
+  C8O.agentBridge.codexPrompt = function (options) {
+    options = options || {};
+    var handle = resolveHandle(options.handle);
+    if (!handle.length) {
+      return { ok: false, status: "error", error: "handle is required", timestamp: now() };
+    }
+    var entry = getRegistry().get(handle);
+    if (entry === null || typeof entry === "undefined") {
+      return { ok: false, status: "not_found", handle: handle, error: "Unknown handle", timestamp: now() };
+    }
+    if (processAlive(entry.process)) {
+      return { ok: false, status: "busy", handle: handle, state: statusOf(entry), timestamp: now() };
+    }
+
+    var promptText = String(options.prompt || "");
+    if (!trim(promptText).length) {
+      return { ok: false, status: "error", handle: handle, error: "prompt is required", timestamp: now() };
+    }
+    if (trim(options.codexThreadId || options.sessionId || options.externalSessionId).length) {
+      entry.sessionId = trim(options.codexThreadId || options.sessionId || options.externalSessionId);
+      entry.codexThreadId = entry.sessionId;
+    }
+    var env = parseObject(options.env, {});
+    if (entry.home && entry.home.path) {
+      env.CODEX_HOME = entry.home.path;
+    }
+    env.TERM = env.TERM || "xterm-256color";
+    var requestId = entry.nextRequestId++;
+    var cursor = entry.nextIndex;
+    entry.status = "starting";
+    entry.phase = entry.sessionId.length ? "codex/resume" : "codex/exec";
+    entry.command = codexCommand(entry.codexPath || "codex", entry, options, promptText);
+    entry.envKeys = envKeys(env);
+    pushEvent(entry, "turn/start", {
+      requestId: requestId,
+      provider: "codex",
+      textLength: promptText.length,
+      resumedThreadId: entry.codexThreadId
+    });
+
+    try {
+      startProcess(entry, env);
+      try {
+        if (entry.writer !== null) {
+          entry.writer.close();
+          entry.writer = null;
+        }
+      } catch (_ignoreCloseCodexStdin) {}
+      return {
+        ok: true,
+        status: "submitted",
+        handle: handle,
+        requestId: requestId,
+        cursor: cursor,
+        state: statusOf(entry),
+        timestamp: now()
+      };
+    } catch (e) {
+      entry.status = "error";
+      entry.phase = "error";
+      entry.lastError = String(e);
+      pushEvent(entry, "turn/error", {
+        message: String(e),
+        provider: "codex"
+      });
+      return {
+        ok: false,
+        status: "error",
+        handle: handle,
+        error: String(e),
+        state: statusOf(entry),
+        timestamp: now()
+      };
+    }
+  };
+
+  C8O.agentBridge.codexClose = function (options) {
+    options = options || {};
+    var handle = resolveHandle(options.handle);
+    if (!handle.length) {
+      return { ok: false, status: "error", error: "handle is required", timestamp: now() };
+    }
+    var registry = getRegistry();
+    var entry = registry.get(handle);
+    if (entry === null || typeof entry === "undefined") {
+      forgetSessionHandle(handle);
+      return { ok: true, status: "not_found", handle: handle, timestamp: now() };
+    }
+    var stateBeforeRemove = statusOf(entry);
+    stopEntry(entry, true);
+    return {
+      ok: true,
+      status: "closed",
+      handle: handle,
+      state: stateBeforeRemove,
+      timestamp: now()
+    };
   };
 
   C8O.agentBridge.events = function (options) {

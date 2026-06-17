@@ -1,0 +1,55 @@
+comment: Check the local Codex CLI runtime used by the agent bridge.
+↓Run [steps.SimpleStep-1781693000101]:
+  expression: |
+    'include("js/vibe_agent_bridge.js");
+    result = C8O.agentBridge.codexSetup({
+      workspaceRoot: typeof workspaceRoot === "undefined" ? "" : workspaceRoot,
+      installDir: typeof installDir === "undefined" ? "" : installDir,
+      codexHome: typeof codexHome === "undefined" ? "" : codexHome,
+      codexHomeScope: typeof codexHomeScope === "undefined" ? "" : codexHomeScope,
+      userId: typeof userId === "undefined" ? "" : userId,
+      conversationId: typeof conversationId === "undefined" ? "" : conversationId,
+      projectId: typeof projectId === "undefined" ? "" : projectId,
+      mcpEndpoint: typeof mcpEndpoint === "undefined" ? "" : mcpEndpoint,
+      codexPath: typeof codexPath === "undefined" ? "" : codexPath
+    });'
+↓result [steps.JsonToXmlStep-1781693000102]:
+  jsonObject:
+    - xmlizable:
+      - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
+      - SmartType:
+        - ↑mode: JS
+        - →→: result
+  key:
+    - xmlizable:
+      - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
+      - SmartType:
+        - ↑mode: PLAIN
+        - →→: result
+↓workspaceRoot [variables.RequestableVariable-1781693000103]:
+  comment: Optional Convertigo user workspace root. Defaults to Engine.USER_WORKSPACE_PATH.
+  description: Optional Convertigo user workspace root. Defaults to Engine.USER_WORKSPACE_PATH.
+↓installDir [variables.RequestableVariable-1781693000104]:
+  comment: Optional installation directory. Defaults to <workspaceRoot>/agents/codex.
+  description: Optional installation directory. Defaults to <workspaceRoot>/agents/codex.
+↓codexHome [variables.RequestableVariable-1781693000105]:
+  comment: Optional explicit CODEX_HOME directory. Defaults to the user's configured Codex home.
+  description: Optional explicit CODEX_HOME directory. Defaults to the user's configured Codex home.
+↓codexHomeScope [variables.RequestableVariable-1781693000106]:
+  comment: 'CODEX_HOME isolation scope: default, shared, user, or conversation. Defaults to default.'
+  description: 'CODEX_HOME isolation scope: default, shared, user, or conversation. Defaults to default.'
+↓userId [variables.RequestableVariable-1781693000107]:
+  comment: User identifier used for user or conversation scoped homes.
+  description: User identifier used for user or conversation scoped homes.
+↓conversationId [variables.RequestableVariable-1781693000108]:
+  comment: Conversation identifier used for conversation scoped homes.
+  description: Conversation identifier used for conversation scoped homes.
+↓projectId [variables.RequestableVariable-1781693000109]:
+  comment: Optional project identifier included in scoped homes.
+  description: Optional project identifier included in scoped homes.
+↓mcpEndpoint [variables.RequestableVariable-1781693000110]:
+  comment: Optional Convertigo MCP endpoint. Defaults to http://localhost:18082/convertigo/api/mcp.
+  description: Optional Convertigo MCP endpoint. Defaults to http://localhost:18082/convertigo/api/mcp.
+↓codexPath [variables.RequestableVariable-1781693000111]:
+  comment: Optional Codex CLI executable path.
+  description: Optional Codex CLI executable path.
