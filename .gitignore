@@ -1,2 +1,6 @@
 _private/
+.settings
+.gradle
+.project
+build/
 .DS_Store
