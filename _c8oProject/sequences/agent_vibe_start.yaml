@@ -34,16 +34,16 @@ comment: Start a long-running vibe-acp process and create an ACP session.
       requestTimeoutMs: typeof requestTimeoutMs === "undefined" ? "" : requestTimeoutMs
     });'
 ↓result [steps.JsonToXmlStep-1781600000202]: 
-  jsonObject:
-    - xmlizable:
+  jsonObject: 
+    - xmlizable: 
       - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
-      - SmartType:
+      - SmartType: 
         - ↑mode: JS
         - →→: result
-  key:
-    - xmlizable:
+  key: 
+    - xmlizable: 
       - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
-      - SmartType:
+      - SmartType: 
         - ↑mode: PLAIN
         - →→: result
 ↓handle [variables.RequestableVariable-1781600000203]: 

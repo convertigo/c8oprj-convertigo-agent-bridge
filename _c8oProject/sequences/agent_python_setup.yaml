@@ -19,16 +19,16 @@ comment: Check or install a workspace-local Python runtime for agent CLIs.
       forcePythonInstall: typeof forcePythonInstall === "undefined" ? false : forcePythonInstall
     });'
 ↓result [steps.JsonToXmlStep-1781785110552]: 
-  jsonObject:
-    - xmlizable:
+  jsonObject: 
+    - xmlizable: 
       - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
-      - SmartType:
+      - SmartType: 
         - ↑mode: JS
         - →→: result
-  key:
-    - xmlizable:
+  key: 
+    - xmlizable: 
       - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
-      - SmartType:
+      - SmartType: 
         - ↑mode: PLAIN
         - →→: result
 ↓install [variables.RequestableVariable-1781785110557]: 

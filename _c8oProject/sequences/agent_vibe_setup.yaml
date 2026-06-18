@@ -28,16 +28,16 @@ comment: Check or install the local Vibe CLI runtime used by the agent bridge.
       forcePythonInstall: typeof forcePythonInstall === "undefined" ? false : forcePythonInstall
     });'
 ↓result [steps.JsonToXmlStep-1781600000102]: 
-  jsonObject:
-    - xmlizable:
+  jsonObject: 
+    - xmlizable: 
       - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
-      - SmartType:
+      - SmartType: 
         - ↑mode: JS
         - →→: result
-  key:
-    - xmlizable:
+  key: 
+    - xmlizable: 
       - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
-      - SmartType:
+      - SmartType: 
         - ↑mode: PLAIN
         - →→: result
 ↓install [variables.RequestableVariable-1781600000103]: 
