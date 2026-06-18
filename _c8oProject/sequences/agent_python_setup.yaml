@@ -1,0 +1,75 @@
+comment: Check or install a workspace-local Python runtime for agent CLIs.
+↓Run [steps.SimpleStep-1781785110545]:
+  expression: |
+    'include("js/vibe_agent_bridge.js");
+    result = C8O.agentBridge.pythonSetup({
+      install: typeof install === "undefined" ? false : install,
+      workspaceRoot: typeof workspaceRoot === "undefined" ? "" : workspaceRoot,
+      pythonPath: typeof pythonPath === "undefined" ? "" : pythonPath,
+      pythonInstallDir: typeof pythonInstallDir === "undefined" ? "" : pythonInstallDir,
+      pythonArchiveUrl: typeof pythonArchiveUrl === "undefined" ? "" : pythonArchiveUrl,
+      pythonArchiveSha256: typeof pythonArchiveSha256 === "undefined" ? "" : pythonArchiveSha256,
+      pythonAssetUrlPrefix: typeof pythonAssetUrlPrefix === "undefined" ? "" : pythonAssetUrlPrefix,
+      pythonMirrorBaseUrl: typeof pythonMirrorBaseUrl === "undefined" ? "" : pythonMirrorBaseUrl,
+      pythonVersion: typeof pythonVersion === "undefined" ? "" : pythonVersion,
+      pythonBuildTag: typeof pythonBuildTag === "undefined" ? "" : pythonBuildTag,
+      pythonPlatform: typeof pythonPlatform === "undefined" ? "" : pythonPlatform,
+      pythonArchiveFlavor: typeof pythonArchiveFlavor === "undefined" ? "" : pythonArchiveFlavor,
+      allowPythonDownload: typeof allowPythonDownload === "undefined" ? true : allowPythonDownload,
+      forcePythonInstall: typeof forcePythonInstall === "undefined" ? false : forcePythonInstall
+    });'
+↓result [steps.JsonToXmlStep-1781785110552]:
+  jsonObject:
+    - xmlizable:
+      - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
+      - SmartType:
+        - ↑mode: JS
+        - →→: result
+  key:
+    - xmlizable:
+      - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
+      - SmartType:
+        - ↑mode: PLAIN
+        - →→: result
+↓install [variables.RequestableVariable-1781785110557]:
+  comment: Set true to install a workspace-local Python runtime when no usable Python is found.
+  description: Set true to install a workspace-local Python runtime when no usable Python is found.
+↓workspaceRoot [variables.RequestableVariable-1781785110559]:
+  comment: Optional Convertigo user workspace root. Defaults to Engine.USER_WORKSPACE_PATH.
+  description: Optional Convertigo user workspace root. Defaults to Engine.USER_WORKSPACE_PATH.
+↓pythonPath [variables.RequestableVariable-1781785110561]:
+  comment: Optional explicit Python executable path.
+  description: Optional explicit Python executable path.
+↓pythonInstallDir [variables.RequestableVariable-1781785110563]:
+  comment: Optional standalone Python installation directory. Defaults to <workspaceRoot>/agents/runtimes/python/<runtime>.
+  description: Optional standalone Python installation directory. Defaults to <workspaceRoot>/agents/runtimes/python/<runtime>.
+↓pythonArchiveUrl [variables.RequestableVariable-1781785110565]:
+  comment: Optional direct Python standalone archive URL. Useful for enterprise mirrors or offline servers.
+  description: Optional direct Python standalone archive URL. Useful for enterprise mirrors or offline servers.
+↓pythonArchiveSha256 [variables.RequestableVariable-1781785110567]:
+  comment: Optional SHA-256 checksum for the Python archive.
+  description: Optional SHA-256 checksum for the Python archive.
+↓pythonAssetUrlPrefix [variables.RequestableVariable-1781785110569]:
+  comment: Optional python-build-standalone asset URL prefix. Supports {tag}.
+  description: Optional python-build-standalone asset URL prefix. Supports {tag}.
+↓pythonMirrorBaseUrl [variables.RequestableVariable-1781785110571]:
+  comment: Alias for pythonAssetUrlPrefix when using an enterprise mirror.
+  description: Alias for pythonAssetUrlPrefix when using an enterprise mirror.
+↓pythonVersion [variables.RequestableVariable-1781785110575]:
+  comment: Python standalone version. Defaults to 3.12.13.
+  description: Python standalone version. Defaults to 3.12.13.
+↓pythonBuildTag [variables.RequestableVariable-1781785110586]:
+  comment: python-build-standalone release tag. Defaults to 20260610.
+  description: python-build-standalone release tag. Defaults to 20260610.
+↓pythonPlatform [variables.RequestableVariable-1781785110588]:
+  comment: Optional python-build-standalone platform tag override.
+  description: Optional python-build-standalone platform tag override.
+↓pythonArchiveFlavor [variables.RequestableVariable-1781785110590]:
+  comment: Archive flavor. Defaults to install_only_stripped.
+  description: Archive flavor. Defaults to install_only_stripped.
+↓allowPythonDownload [variables.RequestableVariable-1781785110592]:
+  comment: Set false to forbid Python downloads and only report missing runtime.
+  description: Set false to forbid Python downloads and only report missing runtime.
+↓forcePythonInstall [variables.RequestableVariable-1781785110594]:
+  comment: Set true to install the standalone runtime even when another Python is already found.
+  description: Set true to install the standalone runtime even when another Python is already found.

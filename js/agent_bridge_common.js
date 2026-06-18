@@ -10,6 +10,8 @@
   var MAX_EVENT_BUFFER = 5000;
 
   var File = Packages.java.io.File;
+  var FileOutputStream = Packages.java.io.FileOutputStream;
+  var RandomAccessFile = Packages.java.io.RandomAccessFile;
   var BufferedReader = Packages.java.io.BufferedReader;
   var InputStreamReader = Packages.java.io.InputStreamReader;
   var OutputStreamWriter = Packages.java.io.OutputStreamWriter;
@@ -27,6 +29,12 @@
   var Files = Packages.java.nio.file.Files;
   var StandardCharsets = Packages.java.nio.charset.StandardCharsets;
   var StandardOpenOption = Packages.java.nio.file.StandardOpenOption;
+  var MessageDigest = Packages.java.security.MessageDigest;
+
+  var DEFAULT_PYTHON_VERSION = "3.12.13";
+  var DEFAULT_PYTHON_BUILD_TAG = "20260610";
+  var DEFAULT_PYTHON_ARCHIVE_FLAVOR = "install_only_stripped";
+  var DEFAULT_PYTHON_ASSET_PREFIX = "https://github.com/astral-sh/python-build-standalone/releases/download/{tag}";
 
   function now() {
     return System.currentTimeMillis();
@@ -132,6 +140,21 @@
 
   function childPath(parent, name) {
     return filePath(new File(parent, name));
+  }
+
+  function isWindows() {
+    return String(System.getProperty("os.name") || "").toLowerCase().indexOf("win") >= 0;
+  }
+
+  function venvBinPath(venvDir, command) {
+    var name = String(command || "python");
+    if (isWindows()) {
+      if (name.indexOf(".") < 0) {
+        name += ".exe";
+      }
+      return childPath(childPath(venvDir, "Scripts"), name);
+    }
+    return childPath(childPath(venvDir, "bin"), name);
   }
 
   function ensureDirectory(file) {
@@ -315,12 +338,16 @@
     return defaultWorkspaceRoot(workspaceProjectName(options));
   }
 
-  function normalizeDirectory(value, fallback) {
+  function normalizeDirectory(value, fallback, baseDir) {
     var text = trim(value);
     if (!text.length) {
       text = fallback;
     }
-    return filePath(new File(text));
+    var file = new File(text);
+    if (!file.isAbsolute()) {
+      file = new File(trim(baseDir) || trim(fallback), text);
+    }
+    return filePath(file);
   }
 
   function normalizeScope(value) {
@@ -721,6 +748,282 @@
     return result;
   }
 
+  function copyStreamToFile(input, file) {
+    var parent = file.getParentFile();
+    if (parent !== null) {
+      ensureDirectory(parent);
+    }
+    var out = new FileOutputStream(file);
+    var total = 0;
+    try {
+      var buffer = java.lang.reflect.Array.newInstance(java.lang.Byte.TYPE, 1024 * 1024);
+      var n;
+      while ((n = input.read(buffer)) !== -1) {
+        out.write(buffer, 0, n);
+        total += n;
+      }
+    } finally {
+      try { out.close(); } catch (_ignoreOutClose) {}
+      try { input.close(); } catch (_ignoreInputClose) {}
+    }
+    return total;
+  }
+
+  function downloadFile(url, file) {
+    var startedAt = now();
+    var result = {
+      url: String(url),
+      path: filePath(file),
+      bytes: 0,
+      durationMs: 0,
+      ok: false,
+      statusCode: 0,
+      error: ""
+    };
+    try {
+      var get = new Packages.org.apache.http.client.methods.HttpGet(String(url));
+      var response = Packages.com.twinsoft.convertigo.engine.Engine.theApp.httpClient4.execute(get);
+      try {
+        result.statusCode = response.getStatusLine().getStatusCode();
+        if (result.statusCode < 200 || result.statusCode >= 300) {
+          throw new Error("HTTP " + result.statusCode + " while downloading " + url);
+        }
+        result.bytes = copyStreamToFile(response.getEntity().getContent(), file);
+        result.ok = true;
+      } finally {
+        try { response.close(); } catch (_ignoreResponseClose) {}
+      }
+    } catch (e) {
+      result.error = String(e);
+    }
+    result.durationMs = now() - startedAt;
+    return result;
+  }
+
+  function sha256File(file) {
+    var digest = MessageDigest.getInstance("SHA-256");
+    var input = Files.newInputStream(file.toPath());
+    try {
+      var buffer = java.lang.reflect.Array.newInstance(java.lang.Byte.TYPE, 1024 * 1024);
+      var n;
+      while ((n = input.read(buffer)) !== -1) {
+        digest.update(buffer, 0, n);
+      }
+    } finally {
+      try { input.close(); } catch (_ignoreDigestClose) {}
+    }
+    var bytes = digest.digest();
+    var out = [];
+    for (var i = 0; i < bytes.length; i++) {
+      var value = bytes[i];
+      if (value < 0) {
+        value += 256;
+      }
+      var hex = value.toString(16);
+      if (hex.length < 2) {
+        hex = "0" + hex;
+      }
+      out.push(hex);
+    }
+    return out.join("");
+  }
+
+  function acquireFileLock(file, timeoutMs) {
+    var startedAt = now();
+    var parent = file.getParentFile();
+    if (parent !== null) {
+      ensureDirectory(parent);
+    }
+    var raf = new RandomAccessFile(file, "rw");
+    var channel = raf.getChannel();
+    while (true) {
+      var lock = null;
+      try {
+        lock = channel.tryLock();
+      } catch (_ignoreLockBusy) {}
+      if (lock !== null) {
+        return {
+          path: filePath(file),
+          release: function () {
+            try { lock.release(); } catch (_ignoreLockRelease) {}
+            try { channel.close(); } catch (_ignoreChannelClose) {}
+            try { raf.close(); } catch (_ignoreRafClose) {}
+          }
+        };
+      }
+      if (now() - startedAt > timeoutMs) {
+        try { channel.close(); } catch (_ignoreChannelCloseTimeout) {}
+        try { raf.close(); } catch (_ignoreRafCloseTimeout) {}
+        throw new Error("Timeout while waiting for Python install lock: " + filePath(file));
+      }
+      Thread.sleep(250);
+    }
+  }
+
+  function pythonPlatformTag() {
+    var os = String(System.getProperty("os.name") || "").toLowerCase();
+    var arch = String(System.getProperty("os.arch") || "").toLowerCase();
+    if (arch === "amd64") {
+      arch = "x86_64";
+    } else if (arch === "arm64") {
+      arch = "aarch64";
+    }
+    if (os.indexOf("win") >= 0) {
+      return arch + "-pc-windows-msvc";
+    }
+    if (os.indexOf("mac") >= 0 || os.indexOf("darwin") >= 0) {
+      return arch + "-apple-darwin";
+    }
+    if (os.indexOf("linux") >= 0) {
+      return arch + "-unknown-linux-gnu";
+    }
+    return arch + "-unknown-" + os.replace(/[^a-z0-9]+/g, "-");
+  }
+
+  function pythonRuntimeSpec(options, workspaceRoot) {
+    options = options || {};
+    var version = trim(options.pythonVersion) || DEFAULT_PYTHON_VERSION;
+    var buildTag = trim(options.pythonBuildTag || options.pythonBuild) || DEFAULT_PYTHON_BUILD_TAG;
+    var platform = trim(options.pythonPlatform) || pythonPlatformTag();
+    var flavor = trim(options.pythonArchiveFlavor) || DEFAULT_PYTHON_ARCHIVE_FLAVOR;
+    var runtimeId = "cpython-" + version + "-" + buildTag + "-" + platform;
+    var installDir = normalizeDirectory(options.pythonInstallDir, childPath(childPath(childPath(workspaceRoot, "agents"), "runtimes/python"), runtimeId), workspaceRoot);
+    var asset = "cpython-" + version + "+" + buildTag + "-" + platform + "-" + flavor + ".tar.gz";
+    var archiveUrl = trim(options.pythonArchiveUrl);
+    if (!archiveUrl.length) {
+      var prefix = trim(options.pythonAssetUrlPrefix || options.pythonMirrorBaseUrl || DEFAULT_PYTHON_ASSET_PREFIX);
+      prefix = prefix.replace(/\{tag\}/g, buildTag);
+      archiveUrl = prefix.replace(/\/+$/g, "") + "/" + asset.replace(/\+/g, "%2B");
+    }
+    return {
+      version: version,
+      buildTag: buildTag,
+      platform: platform,
+      flavor: flavor,
+      id: runtimeId,
+      installDir: installDir,
+      archiveUrl: archiveUrl,
+      archiveName: asset,
+      lockFile: childPath(childPath(workspaceRoot, "agents/runtimes/python"), runtimeId + ".lock")
+    };
+  }
+
+  function pythonBinaryCandidates(runtimeDir) {
+    return [
+      childPath(childPath(runtimeDir, "python/bin"), "python3"),
+      childPath(childPath(runtimeDir, "python/bin"), "python"),
+      childPath(childPath(runtimeDir, "python"), "python.exe"),
+      childPath(childPath(runtimeDir, "bin"), "python3"),
+      childPath(childPath(runtimeDir, "bin"), "python"),
+      childPath(runtimeDir, "python.exe")
+    ];
+  }
+
+  function detectPythonRuntime(options, localPython) {
+    options = options || {};
+    var workspaceRoot = resolveWorkspaceRoot(options);
+    var runtime = pythonRuntimeSpec(options, workspaceRoot);
+    var userHome = String(System.getProperty("user.home"));
+    var homeLocalBin = childPath(userHome, ".local/bin");
+    var pythonEnv = "";
+    try {
+      pythonEnv = String(System.getenv("PYTHON") || "");
+    } catch (_ignorePythonEnv) {}
+    var candidates = [
+      trim(options.pythonPath || options.commandPath),
+      pythonEnv,
+      trim(localPython)
+    ].concat(pythonBinaryCandidates(runtime.installDir), [
+      childPath(homeLocalBin, "python3"),
+      "/opt/homebrew/bin/python3",
+      "/usr/local/bin/python3",
+      "python3",
+      "python"
+    ]);
+    return {
+      workspaceRoot: workspaceRoot,
+      runtime: runtime,
+      command: firstWorkingCommand(candidates, ["--version"])
+    };
+  }
+
+  function ensurePythonRuntime(options) {
+    options = options || {};
+    var detected = detectPythonRuntime(options, "");
+    var runtime = detected.runtime;
+    var forceOption = typeof options.force !== "undefined" ? options.force : options.forcePythonInstall;
+    var force = boolValue(forceOption, false);
+    if (detected.command.found && !force) {
+      return {
+        attempted: false,
+        installed: false,
+        reused: true,
+        runtime: runtime,
+        python: detected.command,
+        steps: [],
+        timestamp: now()
+      };
+    }
+    var allowDownloadOption = typeof options.allowDownload !== "undefined" ? options.allowDownload : options.allowPythonDownload;
+    var allowDownload = boolValue(allowDownloadOption, true);
+    if (!allowDownload) {
+      throw new Error("Python is missing and downloads are disabled");
+    }
+
+    var lock = acquireFileLock(new File(runtime.lockFile), intValue(options.pythonInstallLockTimeoutMs, 600000, 10000, 3600000));
+    var steps = [];
+    try {
+      detected = detectPythonRuntime(options, "");
+      if (detected.command.found && !force) {
+        return {
+          attempted: true,
+          installed: false,
+          reused: true,
+          runtime: runtime,
+          python: detected.command,
+          steps: steps,
+          timestamp: now()
+        };
+      }
+      var target = new File(runtime.installDir);
+      ensureDirectory(target);
+      var archiveFile = new File(target.getParentFile(), runtime.archiveName);
+      var download = downloadFile(runtime.archiveUrl, archiveFile);
+      steps.push({ action: "download", result: download });
+      if (!download.ok) {
+        throw new Error(download.error || ("Unable to download " + runtime.archiveUrl));
+      }
+      var expectedSha256 = trim(options.pythonArchiveSha256 || options.pythonSha256);
+      if (expectedSha256.length) {
+        var actualSha256 = sha256File(archiveFile);
+        steps.push({ action: "sha256", expected: expectedSha256, actual: actualSha256, ok: expectedSha256.toLowerCase() === actualSha256.toLowerCase() });
+        if (expectedSha256.toLowerCase() !== actualSha256.toLowerCase()) {
+          throw new Error("Python archive checksum mismatch");
+        }
+      }
+      steps.push({ action: "extract", result: runCommand(["tar", "-xzf", filePath(archiveFile), "-C", filePath(target)], { timeoutMs: intValue(options.pythonExtractTimeoutMs, 300000, 30000, 1800000) }) });
+      if (!steps[steps.length - 1].result.ok) {
+        throw new Error("Unable to extract Python archive: " + (steps[steps.length - 1].result.stderr || steps[steps.length - 1].result.error));
+      }
+      try { Files.deleteIfExists(archiveFile.toPath()); } catch (_ignoreArchiveDelete) {}
+      detected = detectPythonRuntime(options, "");
+      if (!detected.command.found) {
+        throw new Error("Python archive was extracted but no runnable python executable was found");
+      }
+      return {
+        attempted: true,
+        installed: true,
+        reused: false,
+        runtime: runtime,
+        python: detected.command,
+        steps: steps,
+        timestamp: now()
+      };
+    } finally {
+      lock.release();
+    }
+  }
+
   function drainReader(reader, maxChars) {
     var sb = new java.lang.StringBuilder();
     var line;
@@ -897,12 +1200,11 @@
 
   function detectRuntime(options) {
     var workspaceRoot = resolveWorkspaceRoot(options);
-    var installDir = normalizeDirectory(options.installDir, childPath(workspaceRoot, "agents/vibe"));
+    var installDir = normalizeDirectory(options.installDir, childPath(workspaceRoot, "agents/vibe"), workspaceRoot);
     var venvDir = childPath(installDir, ".venv");
-    var binDir = childPath(venvDir, "bin");
-    var localPython = childPath(binDir, "python");
-    var localVibe = childPath(binDir, "vibe");
-    var localVibeAcp = childPath(binDir, "vibe-acp");
+    var localPython = venvBinPath(venvDir, "python");
+    var localVibe = venvBinPath(venvDir, "vibe");
+    var localVibeAcp = venvBinPath(venvDir, "vibe-acp");
     var home = resolveVibeHome(options, installDir);
     var vibeHome = home.path;
     var mcpEndpoint = trim(options.mcpEndpoint) || DEFAULT_MCP_ENDPOINT;
@@ -910,10 +1212,7 @@
     var userHome = String(System.getProperty("user.home"));
 
     var homeLocalBin = childPath(userHome, ".local/bin");
-    var pythonEnv = "";
-    try {
-      pythonEnv = String(System.getenv("PYTHON") || "");
-    } catch (_ignorePythonEnv) {}
+    var pythonRuntime = detectPythonRuntime(options, localPython);
 
     return {
       workspaceRoot: workspaceRoot,
@@ -923,15 +1222,8 @@
       home: publicHomeInfo(home),
       mcpEndpoint: mcpEndpoint,
       model: model.activeModel,
-      python: firstWorkingCommand([
-        pythonEnv,
-        localPython,
-        childPath(homeLocalBin, "python3"),
-        "/opt/homebrew/bin/python3",
-        "/usr/local/bin/python3",
-        "python3",
-        "python"
-      ], ["--version"]),
+      python: pythonRuntime.command,
+      pythonRuntime: pythonRuntime.runtime,
       uv: firstWorkingCommand([
         childPath(homeLocalBin, "uv"),
         "/opt/homebrew/bin/uv",
@@ -970,7 +1262,7 @@
   function detectCodexRuntime(options) {
     options = options || {};
     var workspaceRoot = resolveWorkspaceRoot(options);
-    var installDir = normalizeDirectory(options.installDir, childPath(workspaceRoot, "agents/codex"));
+    var installDir = normalizeDirectory(options.installDir, childPath(workspaceRoot, "agents/codex"), workspaceRoot);
     var codexHome = resolveCodexHome(options, installDir);
     var userHome = String(System.getProperty("user.home"));
     var command = firstWorkingCommand([

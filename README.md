@@ -18,6 +18,8 @@ Le projet `ConvertigoAgentBridge` est un projet Convertigo autonome place dans :
 
 Il expose les sequences publiques suivantes :
 
+- `agent_python_setup` : verifie ou installe un runtime Python local au
+  workspace Convertigo.
 - `agent_vibe_setup` : verifie ou installe le runtime Vibe local.
 - `agent_vibe_start` : lance `vibe-acp`, fait `initialize`, puis cree une
   session ACP.
@@ -45,6 +47,12 @@ Exemple de check runtime :
 
 ```bash
 curl -sS 'http://localhost:18082/convertigo/projects/ConvertigoAgentBridge/.json?__connector=void&__sequence=agent_vibe_setup&install=false&configure=false'
+```
+
+Exemple d'installation Python workspace-local :
+
+```bash
+curl -sS 'http://localhost:18082/convertigo/projects/ConvertigoAgentBridge/.json?__connector=void&__sequence=agent_python_setup&install=true'
 ```
 
 Exemple de demarrage ACP :
@@ -84,17 +92,47 @@ Le bootstrap Vibe fait :
 1. Detection de Python, `uv`, `vibe` et `vibe-acp`, y compris les chemins
    usuels hors `PATH` du Studio (`~/.local/bin`, `/opt/homebrew/bin`,
    `/usr/local/bin`).
-2. Avec `install=true`, creation de `<workspace>/agents/vibe/.venv`, puis
+2. Si Python est absent et que `install=true`, installation d'un Python
+   standalone dans `<workspace>/agents/runtimes/python/<runtime>`.
+3. Avec `install=true`, creation de `<workspace>/agents/vibe/.venv`, puis
    installation de `mistral-vibe` via `pip`.
-3. Avec `configure=true`, ecriture de
+4. Avec `configure=true`, ecriture de
    `<workspace>/agents/vibe/.vibe-home/config.toml` avec le MCP Convertigo en
    HTTP : `http://localhost:18082/convertigo/api/mcp`.
-4. Demarrage de `vibe-acp` avec ce `VIBE_HOME`, puis handshake ACP
+5. Demarrage de `vibe-acp` avec ce `VIBE_HOME`, puis handshake ACP
    `initialize` + `session/new`.
 
 Vibe 2.9.6 charge aussi sa config `config.toml`; le champ ACP `mcpServers` seul
 ne suffit pas. Le setup local configure donc explicitement le MCP dans le
 `VIBE_HOME` utilise par le process.
+
+## Runtime Python workspace-local
+
+`agent_python_setup` installe Python dans le workspace Convertigo, pas dans le
+projet. Par defaut :
+
+```text
+<workspace>/agents/runtimes/python/cpython-3.12.13-20260610-<platform>
+```
+
+Le setup utilise d'abord un Python deja disponible (`pythonPath`, `PYTHON`,
+venv local, `~/.local/bin`, Homebrew, `python3`, `python`). Si aucun Python
+n'est trouve et que `install=true`, il telecharge une archive
+`python-build-standalone` via le client HTTP du moteur Convertigo, donc avec la
+configuration proxy du serveur. Le telechargement peut etre remplace par :
+
+- `pythonArchiveUrl` : URL directe de l'archive.
+- `pythonAssetUrlPrefix` ou `pythonMirrorBaseUrl` : prefixe d'un miroir
+  interne, avec support de `{tag}`.
+- `pythonArchiveSha256` : controle optionnel de checksum.
+- `allowPythonDownload=false` : mode diagnostic/offline, sans telechargement.
+
+Les chemins optionnels (`installDir`, `pythonInstallDir`, `cwd`) peuvent etre
+absolus ou relatifs. Quand ils sont relatifs, ils sont resolus depuis le
+workspace Convertigo.
+
+Cette installation est partageable par les providers. Les venvs restent separes
+par agent, par exemple `<workspace>/agents/vibe/.venv`.
 
 ## Isolation VIBE_HOME
 
@@ -153,9 +191,8 @@ Validation faite le 2026-06-15 sur `localhost:18082` :
 
 1. Ajouter une route/facade plus propre pour eviter de passer
    `__connector=void` dans les appels assistant.
-2. Valider un prompt Vibe ACP bout en bout avec MCP Convertigo actif et une
+2. Valider l'installation Python/Vibe sur un serveur sans Python preinstalle.
+3. Valider un prompt Vibe ACP bout en bout avec MCP Convertigo actif et une
    vraie authentification Vibe.
-3. Declencher `agent_sweep_expired` depuis un scheduler Convertigo.
-4. Brancher l'UI assistant locale par polling HTTP.
-5. Ajouter un second provider, probablement Codex CLI, quand son protocole
-   stable est confirme.
+4. Declencher `agent_sweep_expired` depuis un scheduler Convertigo.
+5. Brancher l'UI assistant locale par polling HTTP.

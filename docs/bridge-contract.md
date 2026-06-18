@@ -24,6 +24,16 @@ Il ne porte aucune logique metier.
 
 ## Cycle minimal
 
+Verifier ou installer Python dans le workspace Convertigo :
+
+```json
+{
+  "__connector": "void",
+  "__sequence": "agent_python_setup",
+  "install": "true"
+}
+```
+
 Verifier le runtime Vibe :
 
 ```json
@@ -46,6 +56,26 @@ Installer/configurer Vibe dans `<workspace>/agents/vibe` si besoin :
   "mcpEndpoint": "http://localhost:18082/convertigo/api/mcp"
 }
 ```
+
+Si le serveur n'a pas Python, `agent_vibe_setup install=true` appelle le meme
+bootstrap Python que `agent_python_setup`. Le runtime Python est installe sous
+`<workspace>/agents/runtimes/python`, puis le venv Vibe reste sous
+`<workspace>/agents/vibe/.venv`.
+
+Les installations serveur peuvent utiliser un miroir interne :
+
+```json
+{
+  "__connector": "void",
+  "__sequence": "agent_python_setup",
+  "install": "true",
+  "pythonAssetUrlPrefix": "https://mirror.example/pbs/{tag}",
+  "pythonArchiveSha256": "..."
+}
+```
+
+Les chemins de configuration (`installDir`, `pythonInstallDir`, `cwd`) sont
+relatifs au workspace Convertigo quand ils ne sont pas absolus.
 
 Demarrer une session ACP :
 
@@ -183,6 +213,9 @@ Le status retourne les noms de variables disponibles, jamais leurs valeurs.
 `agent_sweep_expired` ferme les process dont l'inactivite depasse leur TTL, ou
 le seuil `maxIdleSeconds` fourni a l'appel. Cette sequence est faite pour etre
 appelee plus tard par un scheduler Convertigo.
+
+Les runtimes Python ne sont pas supprimes par `agent_sweep_expired`. Ils sont
+des outils partages du workspace, comme le cache Node.js du moteur.
 
 ## Validation locale
 

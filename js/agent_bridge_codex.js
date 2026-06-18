@@ -687,7 +687,7 @@
       env.CODEX_HOME = setup.setup.codexHome;
     }
     env.TERM = env.TERM || "xterm-256color";
-    var cwd = normalizeDirectory(options.cwd, setup.setup.workspaceRoot);
+    var cwd = normalizeDirectory(options.cwd, setup.setup.workspaceRoot, setup.setup.workspaceRoot);
     var ttlMillis = intValue(options.ttlSeconds, DEFAULT_TTL_SECONDS, 30, 86400) * 1000;
     var credentials = codexCredentials(options, setup.setup.home);
     var entry = createEntry(handle, "codex", "codex-jsonl", [], cwd, env, ttlMillis, setup.setup.home, credentials, options.model || options.agentModel);

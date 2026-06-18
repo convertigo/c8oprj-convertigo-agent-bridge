@@ -7,6 +7,7 @@
     var setup = detectRuntime(options);
     var installation = {
       attempted: false,
+      python: null,
       steps: []
     };
     var messages = [];
@@ -24,13 +25,32 @@
         installation.attempted = true;
         ensureDirectory(new File(setup.installDir));
         if (!setup.python.found) {
+          installation.python = ensurePythonRuntime({
+            workspaceRoot: options.workspaceRoot,
+            pythonPath: options.pythonPath,
+            pythonInstallDir: options.pythonInstallDir,
+            pythonArchiveUrl: options.pythonArchiveUrl,
+            pythonArchiveSha256: options.pythonArchiveSha256,
+            pythonAssetUrlPrefix: options.pythonAssetUrlPrefix,
+            pythonMirrorBaseUrl: options.pythonMirrorBaseUrl,
+            pythonVersion: options.pythonVersion,
+            pythonBuildTag: options.pythonBuildTag,
+            pythonPlatform: options.pythonPlatform,
+            pythonArchiveFlavor: options.pythonArchiveFlavor,
+            allowPythonDownload: typeof options.allowPythonDownload === "undefined" ? true : options.allowPythonDownload,
+            forcePythonInstall: options.forcePythonInstall
+          });
+          setup = detectRuntime(options);
+        }
+        if (!setup.python.found) {
           throw new Error("Python is required to install mistral-vibe");
         }
         if (!new File(setup.venvDir).exists()) {
           installation.steps.push(runCommand([setup.python.path, "-m", "venv", setup.venvDir], { timeoutMs: 120000 }));
         }
-        installation.steps.push(runCommand([childPath(setup.venvDir, "bin/python"), "-m", "pip", "install", "--upgrade", "pip"], { timeoutMs: 180000 }));
-        installation.steps.push(runCommand([childPath(setup.venvDir, "bin/python"), "-m", "pip", "install", "--upgrade", "mistral-vibe"], { timeoutMs: 600000 }));
+        var venvPython = venvBinPath(setup.venvDir, "python");
+        installation.steps.push(runCommand([venvPython, "-m", "pip", "install", "--upgrade", "pip"], { timeoutMs: 180000 }));
+        installation.steps.push(runCommand([venvPython, "-m", "pip", "install", "--upgrade", "mistral-vibe"], { timeoutMs: 600000 }));
       }
     } catch (e) {
       messages.push(String(e));
@@ -62,6 +82,51 @@
     };
   };
 
+  C8O.agentBridge.pythonSetup = function (options) {
+    options = options || {};
+    var installOption = typeof options.install !== "undefined" ? options.install : options.installPython;
+    var install = boolValue(installOption, false);
+    var messages = [];
+    try {
+      var before = detectPythonRuntime(options, "");
+      var installation = {
+        attempted: false,
+        installed: false,
+        reused: false,
+        steps: []
+      };
+      if (install) {
+        installation = ensurePythonRuntime(options);
+      }
+      var after = detectPythonRuntime(options, "");
+      var ready = after.command.found;
+      if (!ready && !install) {
+        messages.push("Python is missing. Call with install=true to install a workspace-local runtime.");
+      }
+      return {
+        ok: ready,
+        status: ready ? "ready" : "missing",
+        workspaceRoot: after.workspaceRoot,
+        python: after.command,
+        pythonRuntime: after.runtime,
+        before: before.command,
+        installation: installation,
+        messages: messages,
+        timestamp: now()
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        status: "error",
+        phase: "python_setup",
+        error: String(e),
+        setup: detectPythonRuntime(options, ""),
+        messages: messages,
+        timestamp: now()
+      };
+    }
+  };
+
   C8O.agentBridge.vibeStart = function (options) {
     options = options || {};
     var autoConfigure = boolValue(options.autoConfigure, !trim(options.vibeHome).length);
@@ -75,7 +140,19 @@
       projectId: options.projectId,
       mcpEndpoint: options.mcpEndpoint,
       model: options.model || options.agentModel,
-      install: false,
+      install: boolValue(options.install, false),
+      pythonPath: options.pythonPath,
+      pythonInstallDir: options.pythonInstallDir,
+      pythonArchiveUrl: options.pythonArchiveUrl,
+      pythonArchiveSha256: options.pythonArchiveSha256,
+      pythonAssetUrlPrefix: options.pythonAssetUrlPrefix,
+      pythonMirrorBaseUrl: options.pythonMirrorBaseUrl,
+      pythonVersion: options.pythonVersion,
+      pythonBuildTag: options.pythonBuildTag,
+      pythonPlatform: options.pythonPlatform,
+      pythonArchiveFlavor: options.pythonArchiveFlavor,
+      allowPythonDownload: options.allowPythonDownload,
+      forcePythonInstall: options.forcePythonInstall,
       configure: autoConfigure
     });
     if (!setup.ok) {
@@ -109,7 +186,7 @@
     if (vibeHome.length) {
       env.VIBE_HOME = vibeHome;
     }
-    var cwd = normalizeDirectory(options.cwd, setup.setup.workspaceRoot);
+    var cwd = normalizeDirectory(options.cwd, setup.setup.workspaceRoot, setup.setup.workspaceRoot);
     var mcpEndpoint = trim(options.mcpEndpoint) || setup.setup.mcpEndpoint || DEFAULT_MCP_ENDPOINT;
     var command = parseCommand(options.command, [setup.setup.vibeAcp.path || "vibe-acp"]);
     var ttlMillis = intValue(options.ttlSeconds, DEFAULT_TTL_SECONDS, 30, 86400) * 1000;
