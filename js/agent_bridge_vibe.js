@@ -3,6 +3,7 @@
   C8O.agentBridge.vibeSetup = function (options) {
     options = options || {};
     var install = boolValue(options.install, false);
+    var forceVibeInstall = boolValue(options.forceVibeInstall || options.forceInstall || options.force, false);
     var configure = boolValue(options.configure, false);
     var setup = detectRuntime(options);
     var installation = {
@@ -21,7 +22,7 @@
         messages.push("Local VIBE_HOME config written: " + written.path + " (" + written.model + ")");
       }
 
-      if (install && (!setup.vibe.found || !setup.vibeAcp.found)) {
+      if (install && (forceVibeInstall || !setup.vibe.found || !setup.vibeAcp.found)) {
         installation.attempted = true;
         ensureDirectory(new File(setup.installDir));
         if (!setup.python.found) {
@@ -69,14 +70,22 @@
 
     setup = detectRuntime(options);
     var ready = setup.vibe.found && setup.vibeAcp.found;
+    var skills = installAgentSkills(options, "vibe", setup.vibeHome);
     if (!setup.config.selected.valid) {
       messages.push("Selected VIBE_HOME has no valid Convertigo MCP HTTP server config yet");
+    }
+    if (skills.message) {
+      messages.push(skills.message);
+    }
+    if (skills.error) {
+      messages.push(skills.error);
     }
     return {
       ok: ready,
       status: ready ? "ready" : "missing",
       setup: setup,
       installation: installation,
+      skills: skills,
       messages: messages,
       timestamp: now()
     };

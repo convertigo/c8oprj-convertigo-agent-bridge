@@ -25,7 +25,10 @@ comment: Check or install the local Vibe CLI runtime used by the agent bridge.
       pythonPlatform: typeof pythonPlatform === "undefined" ? "" : pythonPlatform,
       pythonArchiveFlavor: typeof pythonArchiveFlavor === "undefined" ? "" : pythonArchiveFlavor,
       allowPythonDownload: typeof allowPythonDownload === "undefined" ? true : allowPythonDownload,
-      forcePythonInstall: typeof forcePythonInstall === "undefined" ? false : forcePythonInstall
+      forcePythonInstall: typeof forcePythonInstall === "undefined" ? false : forcePythonInstall,
+      forceVibeInstall: typeof forceVibeInstall === "undefined" ? false : forceVibeInstall,
+      mcpSkillsSourceDir: typeof mcpSkillsSourceDir === "undefined" ? "" : mcpSkillsSourceDir,
+      skipSkillsInstall: typeof skipSkillsInstall === "undefined" ? "" : skipSkillsInstall
     });'
 ↓result [steps.JsonToXmlStep-1781600000102]: 
   jsonObject: 
@@ -109,3 +112,14 @@ comment: Check or install the local Vibe CLI runtime used by the agent bridge.
 ↓forcePythonInstall [variables.RequestableVariable-1781785157675]: 
   comment: Set true to install the standalone runtime even when another Python is already found.
   description: Set true to install the standalone runtime even when another Python is already found.
+↓forceVibeInstall [variables.RequestableVariable-1781785157677]:
+  comment: Set true to install or update the workspace-local Vibe venv even when Vibe is already found in PATH.
+  description: Set true to install or update the workspace-local Vibe venv even when Vibe is already found in PATH.
+  schemaType: xsd:boolean
+↓mcpSkillsSourceDir [variables.RequestableVariable-1781785157679]:
+  comment: Optional ConvertigoMCP project directory used to synchronize base agent skills.
+  description: Optional ConvertigoMCP project directory used to synchronize base agent skills.
+↓skipSkillsInstall [variables.RequestableVariable-1781785157681]:
+  comment: When true, skips synchronization of the ConvertigoMCP skill pack into the agent home.
+  description: When true, skips synchronization of the ConvertigoMCP skill pack into the agent home.
+  schemaType: xsd:boolean

@@ -289,6 +289,175 @@
     return bytes.length;
   }
 
+  function projectDirectoryByName(projectName) {
+    var name = trim(projectName);
+    if (!name.length) {
+      return null;
+    }
+    try {
+      var manager = Packages.com.twinsoft.convertigo.engine.Engine.theApp.databaseObjectsManager;
+      var project = manager.getOriginalProjectByName(name);
+      if (project === null || typeof project === "undefined") {
+        project = manager.getProjectByName(name);
+      }
+      if (project && project.getDirFile) {
+        var dirFile = project.getDirFile();
+        if (dirFile !== null && typeof dirFile !== "undefined") {
+          return dirFile;
+        }
+      }
+      if (project && project.getDirPath) {
+        var dirPath = project.getDirPath();
+        if (trim(dirPath).length) {
+          return new File(String(dirPath));
+        }
+      }
+    } catch (_ignoreProjectDirectoryByName) {}
+    return null;
+  }
+
+  function mcpSkillSourceCandidate(options) {
+    var explicit = trim(options.mcpSkillsSourceDir || options.skillsSourceDir || options.convertigoMcpDir);
+    if (explicit.length) {
+      return new File(explicit);
+    }
+    var projectDir = projectDirectoryByName("ConvertigoMCP");
+    if (projectDir !== null) {
+      return projectDir;
+    }
+    var home = String(System.getProperty("user.home"));
+    var candidates = [
+      new File(home, "git/c8oprj-c8o-mcp"),
+      new File(home, "git/c8oprj-convertigo-mcp")
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+      if (isMcpSkillSource(candidates[i])) {
+        return candidates[i];
+      }
+    }
+    return null;
+  }
+
+  function isMcpSkillSource(dir) {
+    return dir !== null && dir.exists() && dir.isDirectory() &&
+      new File(dir, "AGENT.md").isFile() &&
+      new File(dir, "TOOLS.md").isFile();
+  }
+
+  function shouldCopySkillFile(file) {
+    var name = String(file.getName());
+    if (name === "AGENT.md" || name === "TOOLS.md" || name === "SKILL.md") {
+      return true;
+    }
+    return name.toLowerCase().lastIndexOf(".md") === name.length - 3;
+  }
+
+  function copySkillTree(source, target, relative, report) {
+    var sourceEntry = new File(source, relative);
+    if (!sourceEntry.exists()) {
+      return;
+    }
+    if (sourceEntry.isFile()) {
+      if (shouldCopySkillFile(sourceEntry)) {
+        var destination = new File(target, relative);
+        writeTextFile(destination, readTextFile(sourceEntry));
+        report.copied.push(relative);
+      }
+      return;
+    }
+    if (!sourceEntry.isDirectory()) {
+      return;
+    }
+    var children = sourceEntry.listFiles();
+    if (children === null) {
+      return;
+    }
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i];
+      var childRelative = relative.length ? relative + "/" + child.getName() : String(child.getName());
+      if (child.isDirectory()) {
+        copySkillTree(source, target, childRelative, report);
+      } else if (shouldCopySkillFile(child)) {
+        var destination = new File(target, childRelative);
+        writeTextFile(destination, readTextFile(child));
+        report.copied.push(childRelative);
+      }
+    }
+  }
+
+  function agentSkillInstructions(provider) {
+    return [
+      "# Convertigo Agent Instructions",
+      "",
+      "You are running inside a Convertigo-integrated local agent session.",
+      "",
+      "- Use the Convertigo MCP/tools whenever you need to inspect, modify, save, reload, or validate Convertigo projects.",
+      "- Work on the selected project unless the user explicitly asks for another project.",
+      "- Prefer Convertigo objects and MCP operations. Do not edit generated folders such as `_private/ionic`, `DisplayObjects`, `dist`, or build outputs.",
+      "- Reply to the user in their language. Keep progress updates short and factual, and never expose hidden reasoning.",
+      "- When you change a project, validate the result with the available Convertigo tools before claiming completion.",
+      "",
+      "The synchronized Convertigo MCP knowledge pack is available in `skills/convertigo-mcp/`.",
+      "Start with `skills/convertigo-mcp/AGENT.md` and `skills/convertigo-mcp/TOOLS.md`, then read only the prompt or resource files relevant to the task.",
+      "",
+      "Provider: " + providerLabel(provider)
+    ].join("\n");
+  }
+
+  function installAgentSkills(options, provider, homePath) {
+    var report = {
+      attempted: false,
+      ok: true,
+      provider: normalizeProvider(provider),
+      source: "",
+      target: "",
+      copied: [],
+      generated: [],
+      skipped: false,
+      message: "",
+      error: ""
+    };
+    if (boolValue(options.skipSkillsInstall || options.skipSkillSync, false)) {
+      report.skipped = true;
+      report.message = "Skill synchronization disabled by request";
+      return report;
+    }
+    var home = trim(homePath);
+    if (!home.length) {
+      report.skipped = true;
+      report.message = "No scoped agent home configured";
+      return report;
+    }
+    report.attempted = true;
+    try {
+      var source = mcpSkillSourceCandidate(options);
+      if (!isMcpSkillSource(source)) {
+        report.ok = false;
+        report.skipped = true;
+        report.message = "ConvertigoMCP skill source not found";
+        return report;
+      }
+      var homeDir = new File(home);
+      ensureDirectory(homeDir);
+      var target = new File(new File(homeDir, "skills"), "convertigo-mcp");
+      ensureDirectory(target);
+      report.source = filePath(source);
+      report.target = filePath(target);
+      copySkillTree(source, target, "AGENT.md", report);
+      copySkillTree(source, target, "TOOLS.md", report);
+      copySkillTree(source, target, "prompts", report);
+      copySkillTree(source, target, "resources", report);
+      writeTextFile(new File(homeDir, "AGENTS.md"), agentSkillInstructions(provider));
+      report.generated.push("AGENTS.md");
+      report.message = "Convertigo MCP skills synchronized";
+    } catch (e) {
+      report.ok = false;
+      report.error = String(e);
+      report.message = "Unable to synchronize Convertigo MCP skills";
+    }
+    return report;
+  }
+
   function readEnvFile(file) {
     var result = {
       path: filePath(file),
@@ -453,6 +622,17 @@
       return "vibe";
     }
     return provider.length ? provider.replace(/[^a-z0-9_.-]/g, "_") : "vibe";
+  }
+
+  function providerLabel(value) {
+    var provider = normalizeProvider(value);
+    if (provider === "codex") {
+      return "Codex";
+    }
+    if (provider === "vibe") {
+      return "Vibe";
+    }
+    return provider;
   }
 
   function stableId(prefix, value) {

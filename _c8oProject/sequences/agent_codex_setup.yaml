@@ -22,7 +22,9 @@ comment: Check the local Codex CLI runtime used by the agent bridge.
       codexInstallMethod: typeof codexInstallMethod === "undefined" ? "" : codexInstallMethod,
       codexInstallTimeoutMs: typeof codexInstallTimeoutMs === "undefined" ? "" : codexInstallTimeoutMs,
       codexInstallLockTimeoutMs: typeof codexInstallLockTimeoutMs === "undefined" ? "" : codexInstallLockTimeoutMs,
-      forceCodexInstall: typeof forceCodexInstall === "undefined" ? "" : forceCodexInstall
+      forceCodexInstall: typeof forceCodexInstall === "undefined" ? "" : forceCodexInstall,
+      mcpSkillsSourceDir: typeof mcpSkillsSourceDir === "undefined" ? "" : mcpSkillsSourceDir,
+      skipSkillsInstall: typeof skipSkillsInstall === "undefined" ? "" : skipSkillsInstall
     });'
 ↓result [steps.JsonToXmlStep-1781693000102]: 
   jsonObject: 
@@ -99,4 +101,11 @@ comment: Check the local Codex CLI runtime used by the agent bridge.
 ↓forceCodexInstall [variables.RequestableVariable-1781791540270]: 
   comment: When true, reinstall Codex even when an executable is already found.
   description: When true, reinstall Codex even when an executable is already found.
+  schemaType: xsd:boolean
+↓mcpSkillsSourceDir [variables.RequestableVariable-1781791540272]:
+  comment: Optional ConvertigoMCP project directory used to synchronize base agent skills.
+  description: Optional ConvertigoMCP project directory used to synchronize base agent skills.
+↓skipSkillsInstall [variables.RequestableVariable-1781791540274]:
+  comment: When true, skips synchronization of the ConvertigoMCP skill pack into the agent home.
+  description: When true, skips synchronization of the ConvertigoMCP skill pack into the agent home.
   schemaType: xsd:boolean

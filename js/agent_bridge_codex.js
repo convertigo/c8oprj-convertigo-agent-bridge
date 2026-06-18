@@ -606,11 +606,19 @@
     if (setup.codex.found && setup.home.path.length && !setup.mcp.hasConvertigo) {
       messages.push("Scoped CODEX_HOME does not currently list the Convertigo MCP server; default CODEX_HOME usually keeps the user's configured Codex auth and MCP servers.");
     }
+    var skills = installAgentSkills(options, "codex", setup.codexHome || setup.home.path);
+    if (skills.message) {
+      messages.push(skills.message);
+    }
+    if (skills.error) {
+      messages.push(skills.error);
+    }
     return {
       ok: setup.codex.found && !setup.home.error.length,
       status: setup.codex.found ? "ready" : "missing",
       setup: setup,
       installation: installation,
+      skills: skills,
       messages: messages,
       timestamp: now()
     };
