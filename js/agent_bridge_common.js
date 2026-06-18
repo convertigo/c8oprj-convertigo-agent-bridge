@@ -3,7 +3,7 @@
   var REGISTRY_KEY = "ConvertigoAgentBridge.agentProcessRegistry.v1";
   var SESSION_HANDLE_ATTR = "ConvertigoAgentBridge.currentHandle";
   var SESSION_CONVERSATION_ATTR = "ConvertigoAgentBridge.currentConversationId";
-  var DEFAULT_MCP_ENDPOINT = "http://localhost:18082/convertigo/api/mcp";
+  var FALLBACK_MCP_PATH = "/api/mcp";
   var DEFAULT_TTL_SECONDS = 3600;
   var DEFAULT_EVENT_LIMIT = 100;
   var MAX_EVENT_LIMIT = 500;
@@ -30,6 +30,7 @@
   var StandardCharsets = Packages.java.nio.charset.StandardCharsets;
   var StandardOpenOption = Packages.java.nio.file.StandardOpenOption;
   var MessageDigest = Packages.java.security.MessageDigest;
+  var ProcessUtils = Packages.com.twinsoft.convertigo.engine.util.ProcessUtils;
 
   var DEFAULT_PYTHON_VERSION = "3.12.13";
   var DEFAULT_PYTHON_BUILD_TAG = "20260610";
@@ -140,6 +141,62 @@
 
   function childPath(parent, name) {
     return filePath(new File(parent, name));
+  }
+
+  function parentPath(path) {
+    var parent = new File(String(path)).getParentFile();
+    return parent === null ? "" : filePath(parent);
+  }
+
+  function normalizeConvertigoBaseUrl(value) {
+    var text = trim(value).replace(/\/+$/g, "");
+    if (!text.length) {
+      return "";
+    }
+    var marker = text.toLowerCase().indexOf("/convertigo");
+    if (marker >= 0) {
+      return text.substring(0, marker + "/convertigo".length);
+    }
+    return text + "/convertigo";
+  }
+
+  function engineConvertigoBaseUrl() {
+    try {
+      var EnginePropertiesManager = Packages.com.twinsoft.convertigo.engine.EnginePropertiesManager;
+      var PropertyName = Packages.com.twinsoft.convertigo.engine.EnginePropertiesManager.PropertyName;
+      var localUrl = normalizeConvertigoBaseUrl(EnginePropertiesManager.getProperty(PropertyName.APPLICATION_SERVER_CONVERTIGO_URL));
+      if (localUrl.length) {
+        return localUrl;
+      }
+      var endpoint = normalizeConvertigoBaseUrl(EnginePropertiesManager.getProperty(PropertyName.APPLICATION_SERVER_CONVERTIGO_ENDPOINT));
+      if (endpoint.length) {
+        return endpoint;
+      }
+    } catch (_ignoreEngineConvertigoUrl) {}
+    try {
+      if (context && context.httpServletRequest) {
+        var request = context.httpServletRequest;
+        var port = request.getServerPort();
+        var portPart = (port === 80 || port === 443) ? "" : ":" + port;
+        var requestUrl = normalizeConvertigoBaseUrl(request.getScheme() + "://" + request.getServerName() + portPart + request.getContextPath());
+        if (requestUrl.length) {
+          return requestUrl;
+        }
+      }
+    } catch (_ignoreRequestConvertigoUrl) {}
+    try {
+      return "http://localhost:" + (Packages.com.twinsoft.convertigo.engine.Engine.isStudioMode() ? "18080" : "28080") + "/convertigo";
+    } catch (_ignoreStudioMode) {
+      return "http://localhost:18080/convertigo";
+    }
+  }
+
+  function defaultMcpEndpoint() {
+    return engineConvertigoBaseUrl().replace(/\/+$/g, "") + FALLBACK_MCP_PATH;
+  }
+
+  function resolveMcpEndpoint(options) {
+    return trim(options && options.mcpEndpoint) || defaultMcpEndpoint();
   }
 
   function isWindows() {
@@ -748,6 +805,43 @@
     return result;
   }
 
+  function runProcessBuilder(pb, options) {
+    var startedAt = now();
+    var result = {
+      command: String(pb.command()),
+      exitCode: -1,
+      stdout: "",
+      stderr: "",
+      durationMs: 0,
+      ok: false,
+      error: ""
+    };
+    try {
+      if (options && options.cwd) {
+        pb.directory(new File(String(options.cwd)));
+      }
+      if (options && options.env) {
+        envObjectToMap(pb.environment(), options.env);
+      }
+      var process = pb.start();
+      var outReader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+      var errReader = new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8));
+      var finished = process.waitFor(options && options.timeoutMs ? options.timeoutMs : 15000, TimeUnit.MILLISECONDS);
+      if (!finished) {
+        process.destroyForcibly();
+        result.error = "timeout";
+      }
+      result.exitCode = process.exitValue();
+      result.stdout = drainReader(outReader, 16000);
+      result.stderr = drainReader(errReader, 16000);
+      result.ok = result.exitCode === 0;
+    } catch (e) {
+      result.error = String(e);
+    }
+    result.durationMs = now() - startedAt;
+    return result;
+  }
+
   function copyStreamToFile(input, file) {
     var parent = file.getParentFile();
     if (parent !== null) {
@@ -854,7 +948,7 @@
       if (now() - startedAt > timeoutMs) {
         try { channel.close(); } catch (_ignoreChannelCloseTimeout) {}
         try { raf.close(); } catch (_ignoreRafCloseTimeout) {}
-        throw new Error("Timeout while waiting for Python install lock: " + filePath(file));
+        throw new Error("Timeout while waiting for install lock: " + filePath(file));
       }
       Thread.sleep(250);
     }
@@ -1016,6 +1110,190 @@
         reused: false,
         runtime: runtime,
         python: detected.command,
+        steps: steps,
+        timestamp: now()
+      };
+    } finally {
+      lock.release();
+    }
+  }
+
+  function executableName(name) {
+    var value = String(name || "");
+    if (isWindows() && value.indexOf(".") < 0) {
+      return value + ".exe";
+    }
+    return value;
+  }
+
+  function scriptCommandName(name) {
+    var value = String(name || "");
+    if (isWindows() && value.indexOf(".") < 0) {
+      return value + ".cmd";
+    }
+    return value;
+  }
+
+  function detectNpmRuntime(options) {
+    options = options || {};
+    var workspaceRoot = resolveWorkspaceRoot(options);
+    var nodeVersion = trim(options.nodeVersion) || String(ProcessUtils.getDefaultNodeVersion());
+    var userHome = String(System.getProperty("user.home"));
+    var localNodeDir = normalizeDirectory(options.nodeDir || options.nodeInstallDir, filePath(ProcessUtils.getDefaultNodeDir()), workspaceRoot);
+    var npmName = scriptCommandName("npm");
+    var candidates = [
+      trim(options.npmPath),
+      childPath(localNodeDir, npmName),
+      childPath(childPath(localNodeDir, "bin"), npmName),
+      childPath(childPath(userHome, ".local/bin"), npmName),
+      "/opt/homebrew/bin/npm",
+      "/usr/local/bin/npm",
+      "npm"
+    ];
+    return {
+      workspaceRoot: workspaceRoot,
+      nodeVersion: nodeVersion,
+      nodeDir: localNodeDir,
+      npm: firstWorkingCommand(candidates, ["--version"])
+    };
+  }
+
+  function ensureNpmRuntime(options) {
+    options = options || {};
+    var detected = detectNpmRuntime(options);
+    if (detected.npm.found) {
+      return {
+        attempted: false,
+        installedNode: false,
+        reused: true,
+        nodeVersion: detected.nodeVersion,
+        nodeDir: detected.nodeDir,
+        npm: detected.npm,
+        steps: [],
+        timestamp: now()
+      };
+    }
+    var allowDownloadOption = typeof options.allowNodeDownload !== "undefined" ? options.allowNodeDownload : true;
+    if (!boolValue(allowDownloadOption, true)) {
+      throw new Error("npm is missing and Node.js downloads are disabled");
+    }
+    var nodeVersion = trim(options.nodeVersion) || String(ProcessUtils.getDefaultNodeVersion());
+    var nodeDir = ProcessUtils.getNodeDir(nodeVersion);
+    var nodeDirPath = filePath(nodeDir);
+    var npm = firstWorkingCommand([
+      childPath(nodeDirPath, scriptCommandName("npm")),
+      childPath(childPath(nodeDirPath, "bin"), scriptCommandName("npm"))
+    ], ["--version"]);
+    if (!npm.found) {
+      throw new Error("Node.js was installed but npm was not found in " + nodeDirPath);
+    }
+    return {
+      attempted: true,
+      installedNode: true,
+      reused: false,
+      nodeVersion: nodeVersion,
+      nodeDir: nodeDirPath,
+      npm: npm,
+      steps: [{ action: "node_install", nodeVersion: nodeVersion, nodeDir: nodeDirPath }],
+      timestamp: now()
+    };
+  }
+
+  function codexLocalBin(installDir) {
+    return childPath(childPath(childPath(installDir, "npm"), "node_modules/.bin"), scriptCommandName("codex"));
+  }
+
+  function codexPackageSpec(options) {
+    var name = trim(options.codexPackage || options.packageName) || "@openai/codex";
+    var version = trim(options.codexVersion || options.packageVersion || options.version) || "latest";
+    if (!version.length) {
+      return name;
+    }
+    return name + "@" + version;
+  }
+
+  function runNpmInstall(npm, packageSpec, prefixDir, options) {
+    var npmDir = parentPath(npm.path);
+    var paths = npmDir.length ? npmDir : "";
+    var command = toJavaList(["npm", "install", "--prefix", prefixDir, packageSpec]);
+    var pb = ProcessUtils.getNpmProcessBuilder(paths, command);
+    return runProcessBuilder(pb, {
+      cwd: prefixDir,
+      timeoutMs: intValue(options.codexInstallTimeoutMs || options.npmInstallTimeoutMs, 600000, 30000, 1800000)
+    });
+  }
+
+  function ensureCodexRuntime(options) {
+    options = options || {};
+    var before = detectCodexRuntime(options);
+    var force = boolValue(options.forceCodexInstall || options.forceInstall || options.force, false);
+    if (before.codex.found && !force) {
+      return {
+        attempted: false,
+        installed: false,
+        reused: true,
+        method: "existing",
+        package: "",
+        npm: null,
+        before: before.codex,
+        codex: before.codex,
+        steps: [],
+        timestamp: now()
+      };
+    }
+    var method = trim(options.codexInstallMethod || options.installMethod) || "npm";
+    if (method !== "npm") {
+      throw new Error("Unsupported Codex install method: " + method);
+    }
+    var lock = acquireFileLock(new File(childPath(before.installDir, "codex-install.lock")), intValue(options.codexInstallLockTimeoutMs, 600000, 10000, 3600000));
+    var steps = [];
+    try {
+      before = detectCodexRuntime(options);
+      if (before.codex.found && !force) {
+        return {
+          attempted: true,
+          installed: false,
+          reused: true,
+          method: "existing",
+          package: "",
+          npm: null,
+          before: before.codex,
+          codex: before.codex,
+          steps: steps,
+          timestamp: now()
+        };
+      }
+      ensureDirectory(new File(before.installDir));
+      var npmPrefix = childPath(before.installDir, "npm");
+      ensureDirectory(new File(npmPrefix));
+      var npmRuntime = ensureNpmRuntime(options);
+      var packageSpec = codexPackageSpec(options);
+      var install = runNpmInstall(npmRuntime.npm, packageSpec, npmPrefix, options);
+      steps.push({ action: "npm_install", package: packageSpec, prefix: npmPrefix, result: install });
+      if (!install.ok) {
+        throw new Error("Unable to install Codex CLI with npm: " + (install.stderr || install.stdout || install.error));
+      }
+      var afterOptions = {};
+      for (var key in options) {
+        if (Object.prototype.hasOwnProperty.call(options, key)) {
+          afterOptions[key] = options[key];
+        }
+      }
+      afterOptions.codexPath = codexLocalBin(before.installDir);
+      var after = detectCodexRuntime(afterOptions);
+      if (!after.codex.found) {
+        throw new Error("Codex CLI package was installed but no runnable codex executable was found");
+      }
+      return {
+        attempted: true,
+        installed: true,
+        reused: false,
+        method: "npm",
+        package: packageSpec,
+        npm: npmRuntime,
+        before: before.codex,
+        codex: after.codex,
+        codexPath: after.codex.path,
         steps: steps,
         timestamp: now()
       };
@@ -1207,7 +1485,7 @@
     var localVibeAcp = venvBinPath(venvDir, "vibe-acp");
     var home = resolveVibeHome(options, installDir);
     var vibeHome = home.path;
-    var mcpEndpoint = trim(options.mcpEndpoint) || DEFAULT_MCP_ENDPOINT;
+    var mcpEndpoint = resolveMcpEndpoint(options);
     var model = vibeModelSpec(options.model || options.agentModel);
     var userHome = String(System.getProperty("user.home"));
 
@@ -1267,6 +1545,7 @@
     var userHome = String(System.getProperty("user.home"));
     var command = firstWorkingCommand([
       trim(options.codexPath || options.commandPath),
+      codexLocalBin(installDir),
       "/Applications/Codex.app/Contents/Resources/codex",
       childPath(childPath(userHome, ".local"), "bin/codex"),
       "/opt/homebrew/bin/codex",
@@ -1299,7 +1578,7 @@
       installDir: installDir,
       codexHome: codexHome.path,
       home: publicHomeInfo(codexHome),
-      mcpEndpoint: trim(options.mcpEndpoint) || DEFAULT_MCP_ENDPOINT,
+      mcpEndpoint: resolveMcpEndpoint(options),
       codex: command,
       mcp: mcp
     };

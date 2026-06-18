@@ -562,8 +562,35 @@
   }
   C8O.agentBridge.codexSetup = function (options) {
     options = options || {};
-    var setup = detectCodexRuntime(options);
+    var install = boolValue(options.install || options.installCodex, false);
+    var installation = {
+      attempted: false,
+      installed: false,
+      reused: false,
+      method: "",
+      package: "",
+      steps: []
+    };
     var messages = [];
+    if (install) {
+      try {
+        installation = ensureCodexRuntime(options);
+      } catch (e) {
+        var failedSetup = detectCodexRuntime(options);
+        messages.push(String(e));
+        return {
+          ok: false,
+          status: "error",
+          phase: "codex_setup",
+          error: String(e),
+          setup: failedSetup,
+          installation: installation,
+          messages: messages,
+          timestamp: now()
+        };
+      }
+    }
+    var setup = detectCodexRuntime(options);
     if (setup.home.error) {
       messages.push(setup.home.error);
     }
@@ -583,6 +610,7 @@
       ok: setup.codex.found && !setup.home.error.length,
       status: setup.codex.found ? "ready" : "missing",
       setup: setup,
+      installation: installation,
       messages: messages,
       timestamp: now()
     };
@@ -655,7 +683,17 @@
       conversationId: options.conversationId,
       projectId: options.projectId,
       mcpEndpoint: options.mcpEndpoint,
-      codexPath: options.codexPath || options.commandPath
+      codexPath: options.codexPath || options.commandPath,
+      install: options.install || options.installCodex,
+      nodeVersion: options.nodeVersion,
+      nodeDir: options.nodeDir || options.nodeInstallDir,
+      npmPath: options.npmPath,
+      allowNodeDownload: options.allowNodeDownload,
+      codexPackage: options.codexPackage || options.packageName,
+      codexVersion: options.codexVersion || options.packageVersion,
+      codexInstallMethod: options.codexInstallMethod || options.installMethod,
+      codexInstallTimeoutMs: options.codexInstallTimeoutMs,
+      forceCodexInstall: options.forceCodexInstall || options.forceInstall
     });
     if (!setup.ok) {
       return {

@@ -187,7 +187,7 @@
       env.VIBE_HOME = vibeHome;
     }
     var cwd = normalizeDirectory(options.cwd, setup.setup.workspaceRoot, setup.setup.workspaceRoot);
-    var mcpEndpoint = trim(options.mcpEndpoint) || setup.setup.mcpEndpoint || DEFAULT_MCP_ENDPOINT;
+    var mcpEndpoint = trim(options.mcpEndpoint) || setup.setup.mcpEndpoint || resolveMcpEndpoint(options);
     var command = parseCommand(options.command, [setup.setup.vibeAcp.path || "vibe-acp"]);
     var ttlMillis = intValue(options.ttlSeconds, DEFAULT_TTL_SECONDS, 30, 86400) * 1000;
     var timeoutMs = intValue(options.requestTimeoutMs, 60000, 1000, 600000);

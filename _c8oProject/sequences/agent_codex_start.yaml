@@ -17,7 +17,17 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
       ttlSeconds: typeof ttlSeconds === "undefined" ? "" : ttlSeconds,
       codexPath: typeof codexPath === "undefined" ? "" : codexPath,
       codexThreadId: typeof codexThreadId === "undefined" ? "" : codexThreadId,
-      model: typeof model === "undefined" ? "" : model
+      model: typeof model === "undefined" ? "" : model,
+      install: typeof install === "undefined" ? "" : install,
+      nodeVersion: typeof nodeVersion === "undefined" ? "" : nodeVersion,
+      nodeDir: typeof nodeDir === "undefined" ? "" : nodeDir,
+      npmPath: typeof npmPath === "undefined" ? "" : npmPath,
+      allowNodeDownload: typeof allowNodeDownload === "undefined" ? "" : allowNodeDownload,
+      codexPackage: typeof codexPackage === "undefined" ? "" : codexPackage,
+      codexVersion: typeof codexVersion === "undefined" ? "" : codexVersion,
+      codexInstallMethod: typeof codexInstallMethod === "undefined" ? "" : codexInstallMethod,
+      codexInstallTimeoutMs: typeof codexInstallTimeoutMs === "undefined" ? "" : codexInstallTimeoutMs,
+      forceCodexInstall: typeof forceCodexInstall === "undefined" ? "" : forceCodexInstall
     });'
 ↓result [steps.JsonToXmlStep-1781693000202]: 
   jsonObject: 
@@ -45,8 +55,8 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
   comment: Workspace directory the agent should work in. Defaults to the Convertigo workspace root.
   description: Workspace directory the agent should work in. Defaults to the Convertigo workspace root.
 ↓mcpEndpoint [variables.RequestableVariable-1781693000207]: 
-  comment: Convertigo MCP endpoint available through the user's Codex configuration.
-  description: Convertigo MCP endpoint available through the user's Codex configuration.
+  comment: Optional Convertigo MCP endpoint. Defaults to the current Convertigo endpoint plus /api/mcp.
+  description: Optional Convertigo MCP endpoint. Defaults to the current Convertigo endpoint plus /api/mcp.
 ↓codexHome [variables.RequestableVariable-1781693000208]: 
   comment: Optional explicit CODEX_HOME. Defaults to the user's configured Codex home.
   description: Optional explicit CODEX_HOME. Defaults to the user's configured Codex home.
@@ -77,3 +87,36 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
 ↓model [variables.RequestableVariable-1781700500217]: 
   comment: Optional Codex model override.
   description: Optional Codex model override.
+↓install [variables.RequestableVariable-1781791566455]: 
+  comment: When true, installs the Codex CLI if it is missing before starting.
+  description: When true, installs the Codex CLI if it is missing before starting.
+  schemaType: xsd:boolean
+↓nodeVersion [variables.RequestableVariable-1781791566457]: 
+  comment: Optional Node.js version used by the Convertigo workspace Node installer.
+  description: Optional Node.js version used by the Convertigo workspace Node installer.
+↓nodeDir [variables.RequestableVariable-1781791566459]: 
+  comment: Optional Node.js installation directory override.
+  description: Optional Node.js installation directory override.
+↓npmPath [variables.RequestableVariable-1781791566461]: 
+  comment: Optional npm executable path override.
+  description: Optional npm executable path override.
+↓allowNodeDownload [variables.RequestableVariable-1781791566463]: 
+  comment: When false, setup fails instead of downloading Node.js through Convertigo ProcessUtils.
+  description: When false, setup fails instead of downloading Node.js through Convertigo ProcessUtils.
+  schemaType: xsd:boolean
+↓codexPackage [variables.RequestableVariable-1781791566465]: 
+  comment: Optional npm package name for Codex CLI. Defaults to @openai/codex.
+  description: Optional npm package name for Codex CLI. Defaults to @openai/codex.
+↓codexVersion [variables.RequestableVariable-1781791566467]: 
+  comment: Optional npm package version for Codex CLI. Defaults to latest.
+  description: Optional npm package version for Codex CLI. Defaults to latest.
+↓codexInstallMethod [variables.RequestableVariable-1781791566469]: 
+  comment: Codex install method. Only npm is currently supported.
+  description: Codex install method. Only npm is currently supported.
+↓codexInstallTimeoutMs [variables.RequestableVariable-1781791566471]: 
+  comment: Timeout in milliseconds for npm install. Defaults to 600000.
+  description: Timeout in milliseconds for npm install. Defaults to 600000.
+↓forceCodexInstall [variables.RequestableVariable-1781791566473]: 
+  comment: When true, reinstall Codex even when an executable is already found.
+  description: When true, reinstall Codex even when an executable is already found.
+  schemaType: xsd:boolean

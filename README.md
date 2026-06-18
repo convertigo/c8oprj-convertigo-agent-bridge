@@ -36,23 +36,34 @@ handle a chaque requete.
 
 ## Appels HTTP
 
-Sur le hotfix 8.4.4 beta courant, les appels HTTP directs doivent passer le
-connecteur minimal `void` :
+Les appels HTTP directs doivent passer le connecteur minimal `void`. Si
+`mcpEndpoint` est vide, le bridge calcule l'endpoint depuis l'URL Convertigo
+courante du moteur, puis ajoute `/api/mcp`. En local, les ports habituels sont
+`18080` en Studio et `28080` en serveur.
+
+Pour les exemples :
 
 ```text
-http://localhost:18082/convertigo/projects/ConvertigoAgentBridge/.json?__connector=void&__sequence=agent_vibe_setup
+BASE_URL=http://localhost:18080/convertigo
+BRIDGE_URL=$BASE_URL/projects/ConvertigoAgentBridge/.json
 ```
 
 Exemple de check runtime :
 
 ```bash
-curl -sS 'http://localhost:18082/convertigo/projects/ConvertigoAgentBridge/.json?__connector=void&__sequence=agent_vibe_setup&install=false&configure=false'
+curl -sS "$BRIDGE_URL?__connector=void&__sequence=agent_vibe_setup&install=false&configure=false"
 ```
 
 Exemple d'installation Python workspace-local :
 
 ```bash
-curl -sS 'http://localhost:18082/convertigo/projects/ConvertigoAgentBridge/.json?__connector=void&__sequence=agent_python_setup&install=true'
+curl -sS "$BRIDGE_URL?__connector=void&__sequence=agent_python_setup&install=true"
+```
+
+Exemple d'installation Codex workspace-local :
+
+```bash
+curl -sS "$BRIDGE_URL?__connector=void&__sequence=agent_codex_setup&install=true"
 ```
 
 Exemple de demarrage ACP :
@@ -65,7 +76,7 @@ curl -sS --get \
   --data-urlencode 'cwd=/Users/nicolas/git' \
   --data-urlencode 'vibeHome=/Users/nicolas/git/agents/vibe/.vibe-home' \
   --data-urlencode 'env={"MISTRAL_API_KEY":"dummy"}' \
-  'http://localhost:18082/convertigo/projects/ConvertigoAgentBridge/.json'
+  "$BRIDGE_URL"
 ```
 
 Le streaming cote UI se fait par polling :
@@ -77,7 +88,7 @@ curl -sS --get \
   --data-urlencode 'handle=test-vibe-wrapper' \
   --data-urlencode 'cursor=0' \
   --data-urlencode 'waitMs=1000' \
-  'http://localhost:18082/convertigo/projects/ConvertigoAgentBridge/.json'
+  "$BRIDGE_URL"
 ```
 
 ## Vibe ACP
@@ -98,7 +109,8 @@ Le bootstrap Vibe fait :
    installation de `mistral-vibe` via `pip`.
 4. Avec `configure=true`, ecriture de
    `<workspace>/agents/vibe/.vibe-home/config.toml` avec le MCP Convertigo en
-   HTTP : `http://localhost:18082/convertigo/api/mcp`.
+   HTTP. Si `mcpEndpoint` est vide, il est calcule depuis l'endpoint Convertigo
+   courant.
 5. Demarrage de `vibe-acp` avec ce `VIBE_HOME`, puis handshake ACP
    `initialize` + `session/new`.
 
@@ -133,6 +145,32 @@ workspace Convertigo.
 
 Cette installation est partageable par les providers. Les venvs restent separes
 par agent, par exemple `<workspace>/agents/vibe/.venv`.
+
+## Runtime Codex workspace-local
+
+`agent_codex_setup` detecte d'abord une CLI Codex existante (`codexPath`, puis
+`<workspace>/agents/codex/npm/node_modules/.bin/codex`, puis les chemins usuels
+du poste). Si aucune CLI n'est trouvee et que `install=true`, il installe le
+package npm `@openai/codex@latest` dans :
+
+```text
+<workspace>/agents/codex/npm
+```
+
+L'installation utilise le mecanisme Node/npm du moteur Convertigo
+(`ProcessUtils`), donc avec le repertoire Node du workspace et la configuration
+proxy du serveur. Les options principales sont :
+
+- `nodeVersion`, `nodeDir`, `npmPath` : overrides Node/npm.
+- `allowNodeDownload=false` : mode diagnostic/offline, sans telechargement
+  Node.
+- `codexPackage`, `codexVersion` : package npm et version a installer.
+- `forceCodexInstall=true` : force la reinstall meme si une CLI est deja
+  detectee.
+
+L'installation de la CLI ne configure pas l'authentification Codex. L'utilisateur
+doit toujours disposer d'une session Codex valide dans le `CODEX_HOME` choisi,
+ou utiliser le home Codex par defaut du poste.
 
 ## Isolation VIBE_HOME
 
@@ -171,7 +209,7 @@ status, seuls les noms de variables injectees le sont.
 
 ## Validation locale
 
-Validation faite le 2026-06-15 sur `localhost:18082` :
+Validation faite le 2026-06-15 sur le port hotfix local de developpement :
 
 - `agent_vibe_setup install=false configure=false` detecte Python 3.14.5,
   `uv` 0.11.5, `vibe` 2.9.6 et `vibe-acp` 2.9.6.
