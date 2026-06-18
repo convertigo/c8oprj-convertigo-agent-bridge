@@ -1,0 +1,58 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - '**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ssh-key: ${{ secrets.SSH_KEY }}
+
+      - name: Package Convertigo project
+        run: |
+          project_name="ConvertigoAgentBridge"
+          workdir="$(mktemp -d)"
+          mkdir "$workdir/$project_name"
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.DS_Store' \
+            --exclude='_private' \
+            --exclude='Traces' \
+            --exclude='build' \
+            ./ "$workdir/$project_name/"
+          (cd "$workdir" && zip -qr "$GITHUB_WORKSPACE/$project_name.car" "$project_name")
+
+      - name: Upload CAR file
+        uses: actions/upload-artifact@v4
+        with:
+          name: ConvertigoAgentBridge
+          path: ConvertigoAgentBridge.car
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download CAR file
+        uses: actions/download-artifact@v4
+        with:
+          name: ConvertigoAgentBridge
+
+      - name: Deploy to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: '*.car'
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
