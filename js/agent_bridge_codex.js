@@ -591,20 +591,31 @@
       }
     }
     var setup = detectCodexRuntime(options);
+    var bootstrap = {
+      attempted: false,
+      ok: true,
+      home: "",
+      copied: [],
+      reused: [],
+      generated: [],
+      message: "",
+      error: ""
+    };
     if (setup.home.error) {
       messages.push(setup.home.error);
     }
-    if (setup.home.path.length && !new File(setup.home.path).exists()) {
-      try {
-        ensureDirectory(new File(setup.home.path));
-        messages.push("CODEX_HOME directory created: " + setup.home.path);
-      } catch (e) {
-        messages.push(String(e));
+    if (setup.home.path.length && !setup.home.error.length) {
+      bootstrap = bootstrapCodexHome(options, setup.home.path, setup.mcpEndpoint);
+      if (bootstrap.message) {
+        messages.push(bootstrap.message);
+      }
+      if (bootstrap.error) {
+        messages.push(bootstrap.error);
       }
       setup = detectCodexRuntime(options);
     }
     if (setup.codex.found && setup.home.path.length && !setup.mcp.hasConvertigo) {
-      messages.push("Scoped CODEX_HOME does not currently list the Convertigo MCP server; default CODEX_HOME usually keeps the user's configured Codex auth and MCP servers.");
+      messages.push("Scoped CODEX_HOME does not list the Convertigo MCP server after bootstrap.");
     }
     var skills = installAgentSkills(options, "codex", setup.codexHome || setup.home.path);
     if (skills.message) {
@@ -618,6 +629,7 @@
       status: setup.codex.found ? "ready" : "missing",
       setup: setup,
       installation: installation,
+      bootstrap: bootstrap,
       skills: skills,
       messages: messages,
       timestamp: now()
@@ -701,7 +713,9 @@
       codexVersion: options.codexVersion || options.packageVersion,
       codexInstallMethod: options.codexInstallMethod || options.installMethod,
       codexInstallTimeoutMs: options.codexInstallTimeoutMs,
-      forceCodexInstall: options.forceCodexInstall || options.forceInstall
+      forceCodexInstall: options.forceCodexInstall || options.forceInstall,
+      mcpSkillsSourceDir: options.mcpSkillsSourceDir || options.skillsSourceDir || options.convertigoMcpDir,
+      skipSkillsInstall: options.skipSkillsInstall || options.skipSkillSync
     });
     if (!setup.ok) {
       return {
