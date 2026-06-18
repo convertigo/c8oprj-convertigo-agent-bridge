@@ -102,10 +102,10 @@ comment: Check the local Codex CLI runtime used by the agent bridge.
   comment: When true, reinstall Codex even when an executable is already found.
   description: When true, reinstall Codex even when an executable is already found.
   schemaType: xsd:boolean
-↓mcpSkillsSourceDir [variables.RequestableVariable-1781791540272]:
+↓mcpSkillsSourceDir [variables.RequestableVariable-1781791540272]: 
   comment: Optional ConvertigoMCP project directory used to synchronize base agent skills.
   description: Optional ConvertigoMCP project directory used to synchronize base agent skills.
-↓skipSkillsInstall [variables.RequestableVariable-1781791540274]:
+↓skipSkillsInstall [variables.RequestableVariable-1781791540274]: 
   comment: When true, skips synchronization of the ConvertigoMCP skill pack into the agent home.
   description: When true, skips synchronization of the ConvertigoMCP skill pack into the agent home.
   schemaType: xsd:boolean
