@@ -732,6 +732,10 @@
     if (setup.setup.codexHome.length) {
       env.CODEX_HOME = setup.setup.codexHome;
     }
+    var nodePath = nodeRuntimeSearchPath(options);
+    if (nodePath.length) {
+      env.PATH = nodePath + String(File.pathSeparator) + (env.PATH || String(System.getenv("PATH") || ""));
+    }
     env.TERM = env.TERM || "xterm-256color";
     var cwd = normalizeDirectory(options.cwd, setup.setup.workspaceRoot, setup.setup.workspaceRoot);
     var ttlMillis = intValue(options.ttlSeconds, DEFAULT_TTL_SECONDS, 30, 86400) * 1000;

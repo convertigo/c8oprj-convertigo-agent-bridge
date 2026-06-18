@@ -1,4 +1,5 @@
 comment: Check or install the local Vibe CLI runtime used by the agent bridge.
+responseTimeout: 900
 ↓Run [steps.SimpleStep-1781600000101]: 
   expression: |
     'include("js/vibe_agent_bridge.js");

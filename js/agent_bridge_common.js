@@ -148,6 +148,41 @@
     return parent === null ? "" : filePath(parent);
   }
 
+  function pathListAppend(paths, path) {
+    var value = trim(path);
+    if (!value.length) {
+      return;
+    }
+    for (var i = 0; i < paths.length; i++) {
+      if (paths[i] === value) {
+        return;
+      }
+    }
+    paths.push(value);
+  }
+
+  function nodeRuntimeSearchPath(options) {
+    options = options || {};
+    var paths = [];
+    var addNodeDir = function (dir) {
+      var value = trim(dir);
+      if (!value.length) {
+        return;
+      }
+      pathListAppend(paths, value);
+      try {
+        pathListAppend(paths, childPath(value, "bin"));
+      } catch (_ignoreNodeBinPath) {}
+    };
+    addNodeDir(options.nodeDir || options.nodeInstallDir);
+    try {
+      addNodeDir(filePath(ProcessUtils.getDefaultNodeDir()));
+    } catch (_ignoreDefaultNodeDir) {}
+    pathListAppend(paths, "/opt/homebrew/bin");
+    pathListAppend(paths, "/usr/local/bin");
+    return paths.join(String(File.pathSeparator));
+  }
+
   function normalizeConvertigoBaseUrl(value) {
     var text = trim(value).replace(/\/+$/g, "");
     if (!text.length) {
@@ -425,7 +460,7 @@
     var home = trim(homePath);
     if (!home.length) {
       report.skipped = true;
-      report.message = "No scoped agent home configured";
+      report.message = "Using the default agent home; skill synchronization skipped";
       return report;
     }
     report.attempted = true;
@@ -1395,6 +1430,13 @@
   function runNpmInstall(npm, packageSpec, prefixDir, options) {
     var npmDir = parentPath(npm.path);
     var paths = npmDir.length ? npmDir : "";
+    var normalizedNpmDir = npmDir.replace(/\\/g, "/");
+    var npmMarker = "/lib/node_modules/npm/bin";
+    var markerIndex = normalizedNpmDir.indexOf(npmMarker);
+    if (markerIndex > 0) {
+      var nodeBinDir = normalizedNpmDir.substring(0, markerIndex) + "/bin";
+      paths = nodeBinDir + (paths.length ? String(File.pathSeparator) + paths : "");
+    }
     var command = toJavaList(["npm", "install", "--prefix", prefixDir, packageSpec]);
     var pb = ProcessUtils.getNpmProcessBuilder(paths, command);
     return runProcessBuilder(pb, {
@@ -1496,7 +1538,7 @@
     return String(sb.toString());
   }
 
-  function firstWorkingCommand(candidates, versionArgs) {
+  function firstWorkingCommand(candidates, versionArgs, extraPath) {
     var attempts = [];
     for (var i = 0; i < candidates.length; i++) {
       var candidate = trim(candidates[i]);
@@ -1504,7 +1546,28 @@
         continue;
       }
       var args = [candidate].concat(versionArgs || ["--version"]);
-      var probe = runCommand(args, { timeoutMs: 10000 });
+      var env = {};
+      var candidateParent = "";
+      try {
+        candidateParent = parentPath(candidate);
+      } catch (_ignoreCandidateParent) {}
+      var pathPrefix = "";
+      if (candidateParent.length) {
+        pathPrefix = candidateParent;
+        var npmMarker = "/lib/node_modules/npm/bin";
+        var normalizedParent = candidateParent.replace(/\\/g, "/");
+        var markerIndex = normalizedParent.indexOf(npmMarker);
+        if (markerIndex > 0) {
+          pathPrefix = pathPrefix + String(File.pathSeparator) + normalizedParent.substring(0, markerIndex) + "/bin";
+        }
+      }
+      if (trim(extraPath).length) {
+        pathPrefix = pathPrefix.length ? pathPrefix + String(File.pathSeparator) + trim(extraPath) : trim(extraPath);
+      }
+      if (pathPrefix.length) {
+        env.PATH = pathPrefix + String(File.pathSeparator) + String(System.getenv("PATH") || "");
+      }
+      var probe = runCommand(args, { timeoutMs: 10000, env: env });
       var versionText = trim((probe.stdout || "") + "\n" + (probe.stderr || ""));
       attempts.push({
         path: candidate,
@@ -1731,7 +1794,7 @@
       "/opt/homebrew/bin/codex",
       "/usr/local/bin/codex",
       "codex"
-    ], ["--version"]);
+    ], ["--version"], nodeRuntimeSearchPath(options));
     var mcp = {
       checked: false,
       ok: false,
@@ -1742,6 +1805,10 @@
     };
     if (command.found) {
       var env = {};
+      var path = nodeRuntimeSearchPath(options);
+      if (path.length) {
+        env.PATH = path + String(File.pathSeparator) + String(System.getenv("PATH") || "");
+      }
       if (codexHome.path.length) {
         env.CODEX_HOME = codexHome.path;
       }
