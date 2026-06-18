@@ -1,5 +1,5 @@
 ↑convertigo: 8.0.0.m006
-↓ConvertigoAgentBridge [core.Project]:
+↓ConvertigoAgentBridge [core.Project]: 
   comment: Local bridge between Convertigo Studio assistants and long-running AI agent CLIs
   contextTimeout: 59
   corsOrigin: =Origin
