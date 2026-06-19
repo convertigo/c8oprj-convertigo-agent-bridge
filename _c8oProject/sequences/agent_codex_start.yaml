@@ -58,11 +58,11 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
   comment: Optional Convertigo MCP endpoint. Defaults to the current Convertigo endpoint plus /api/mcp.
   description: Optional Convertigo MCP endpoint. Defaults to the current Convertigo endpoint plus /api/mcp.
 ↓codexHome [variables.RequestableVariable-1781693000208]: 
-  comment: Optional explicit CODEX_HOME. Defaults to the user's configured Codex home.
-  description: Optional explicit CODEX_HOME. Defaults to the user's configured Codex home.
+  comment: Optional explicit CODEX_HOME directory. When empty, the bridge resolves it from codexHomeScope.
+  description: Optional explicit CODEX_HOME directory. When empty, the bridge resolves it from codexHomeScope.
 ↓codexHomeScope [variables.RequestableVariable-1781693000209]: 
-  comment: 'CODEX_HOME isolation scope: default, shared, user, or conversation. Defaults to default.'
-  description: 'CODEX_HOME isolation scope: default, shared, user, or conversation. Defaults to default.'
+  comment: 'CODEX_HOME isolation scope: default, shared, user, or conversation. Defaults to visible user-scoped workspace home.'
+  description: 'CODEX_HOME isolation scope: default, shared, user, or conversation. Defaults to visible user-scoped workspace home.'
 ↓userId [variables.RequestableVariable-1781693000210]: 
   comment: User identifier used for user or conversation scoped homes.
   description: User identifier used for user or conversation scoped homes.

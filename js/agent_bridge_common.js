@@ -28,6 +28,7 @@
   var TimeUnit = Packages.java.util.concurrent.TimeUnit;
   var Files = Packages.java.nio.file.Files;
   var StandardCharsets = Packages.java.nio.charset.StandardCharsets;
+  var StandardCopyOption = Packages.java.nio.file.StandardCopyOption;
   var StandardOpenOption = Packages.java.nio.file.StandardOpenOption;
   var MessageDigest = Packages.java.security.MessageDigest;
   var ProcessUtils = Packages.com.twinsoft.convertigo.engine.util.ProcessUtils;
@@ -335,6 +336,53 @@
       StandardOpenOption.WRITE
     );
     return bytes.length;
+  }
+
+  function copyFileBinary(source, target) {
+    var parent = target.getParentFile();
+    if (parent !== null) {
+      ensureDirectory(parent);
+    }
+    Files.copy(source.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+  }
+
+  function copyDirectoryTree(source, target) {
+    if (source.isDirectory()) {
+      ensureDirectory(target);
+      var children = source.listFiles();
+      if (children === null) {
+        return;
+      }
+      for (var i = 0; i < children.length; i++) {
+        copyDirectoryTree(children[i], new File(target, children[i].getName()));
+      }
+      return;
+    }
+    if (source.isFile()) {
+      copyFileBinary(source, target);
+    }
+  }
+
+  function migrateLegacyHiddenCodexHome(homeDir, report) {
+    if (String(homeDir.getName()) !== "codex-home" || homeDir.exists()) {
+      return;
+    }
+    var parent = homeDir.getParentFile();
+    if (parent === null) {
+      return;
+    }
+    var legacy = new File(parent, ".codex-home");
+    if (!legacy.isDirectory()) {
+      return;
+    }
+    try {
+      if (legacy.renameTo(homeDir)) {
+        report.reused.push("legacy .codex-home migrated to codex-home");
+        return;
+      }
+    } catch (_ignoreLegacyRename) {}
+    copyDirectoryTree(legacy, homeDir);
+    report.copied.push("legacy .codex-home copied to codex-home");
   }
 
   function projectDirectoryByName(projectName) {
@@ -851,6 +899,7 @@
     report.attempted = true;
     try {
       var homeDir = new File(report.home);
+      migrateLegacyHiddenCodexHome(homeDir, report);
       ensureDirectory(homeDir);
       var userCodex = new File(String(System.getProperty("user.home")), ".codex");
       copyCodexUserFileIfMissing(userCodex, homeDir, "auth.json", report);
@@ -1009,7 +1058,7 @@
   function normalizeCodexHomeScope(value) {
     var scope = trim(value).toLowerCase();
     if (!scope.length) {
-      return "default";
+      return "user";
     }
     if (scope === "none" || scope === "user-home" || scope === "user_home" || scope === "home") {
       return "default";
@@ -1023,7 +1072,7 @@
     if (scope === "explicit" || scope === "default" || scope === "shared" || scope === "user" || scope === "conversation") {
       return scope;
     }
-    return "default";
+    return "user";
   }
 
   function normalizeProvider(value) {
@@ -1234,7 +1283,7 @@
     if (scope === "shared") {
       return {
         scope: "shared",
-        path: childPath(installDir, ".codex-home"),
+        path: childPath(installDir, "codex-home"),
         explicit: false,
         userId: "",
         conversationId: "",
@@ -1258,10 +1307,9 @@
         };
       }
       var userBase = childPath(childPath(root, "users"), stableId("user", user));
-      userBase = appendProjectPath(userBase, project);
       return {
         scope: "user",
-        path: childPath(userBase, ".codex-home"),
+        path: childPath(userBase, "codex-home"),
         explicit: false,
         userId: user,
         conversationId: "",
@@ -1282,7 +1330,7 @@
     }
     return {
       scope: "conversation",
-      path: childPath(convBase, ".codex-home"),
+      path: childPath(convBase, "codex-home"),
       explicit: false,
       userId: user,
       conversationId: conv,

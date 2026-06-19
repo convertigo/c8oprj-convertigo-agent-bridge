@@ -47,11 +47,11 @@ responseTimeout: 900
   comment: Optional installation directory. Defaults to <workspaceRoot>/agents/codex.
   description: Optional installation directory. Defaults to <workspaceRoot>/agents/codex.
 ↓codexHome [variables.RequestableVariable-1781693000105]: 
-  comment: Optional explicit CODEX_HOME directory. Defaults to the user's configured Codex home.
-  description: Optional explicit CODEX_HOME directory. Defaults to the user's configured Codex home.
+  comment: Optional explicit CODEX_HOME directory. When empty, the bridge resolves it from codexHomeScope.
+  description: Optional explicit CODEX_HOME directory. When empty, the bridge resolves it from codexHomeScope.
 ↓codexHomeScope [variables.RequestableVariable-1781693000106]: 
-  comment: 'CODEX_HOME isolation scope: default, shared, user, or conversation. Defaults to default.'
-  description: 'CODEX_HOME isolation scope: default, shared, user, or conversation. Defaults to default.'
+  comment: 'CODEX_HOME isolation scope: default, shared, user, or conversation. Defaults to visible user-scoped workspace home.'
+  description: 'CODEX_HOME isolation scope: default, shared, user, or conversation. Defaults to visible user-scoped workspace home.'
 ↓userId [variables.RequestableVariable-1781693000107]: 
   comment: User identifier used for user or conversation scoped homes.
   description: User identifier used for user or conversation scoped homes.
