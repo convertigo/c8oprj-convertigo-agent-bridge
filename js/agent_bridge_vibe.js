@@ -6,6 +6,8 @@
     var forceVibeInstall = boolValue(options.forceVibeInstall || options.forceInstall || options.force, false);
     var configure = boolValue(options.configure, false);
     var setup = detectRuntime(options);
+    var workspaceFirstOption = typeof options.workspaceInstallFirst !== "undefined" ? options.workspaceInstallFirst : options.preferWorkspaceInstall;
+    var workspaceFirst = boolValue(typeof workspaceFirstOption === "undefined" ? true : workspaceFirstOption, true);
     var installation = {
       attempted: false,
       python: null,
@@ -22,7 +24,8 @@
         messages.push("Local VIBE_HOME config written: " + written.path + " (" + written.model + ")");
       }
 
-      if (install && (forceVibeInstall || !setup.vibe.found || !setup.vibeAcp.found)) {
+      var workspaceVibeReady = commandPathStartsWith(setup.vibe, setup.installDir) && commandPathStartsWith(setup.vibeAcp, setup.installDir);
+      if (install && (forceVibeInstall || !setup.vibe.found || !setup.vibeAcp.found || (workspaceFirst && !workspaceVibeReady))) {
         installation.attempted = true;
         ensureDirectory(new File(setup.installDir));
         if (!setup.python.found) {
@@ -56,6 +59,27 @@
     } catch (e) {
       messages.push(String(e));
       setup = detectRuntime(options);
+      if (workspaceFirst && setup.vibe.found && setup.vibeAcp.found && !forceVibeInstall) {
+        messages.push("Workspace Vibe install failed; using user PATH fallback.");
+        installation.error = String(e);
+        var fallbackSkills = installAgentSkills(options, "vibe", setup.vibeHome);
+        if (fallbackSkills.message) {
+          messages.push(fallbackSkills.message);
+        }
+        if (fallbackSkills.error) {
+          messages.push(fallbackSkills.error);
+        }
+        return {
+          ok: true,
+          status: "ready",
+          phase: "fallback",
+          setup: setup,
+          installation: installation,
+          skills: fallbackSkills,
+          messages: messages,
+          timestamp: now()
+        };
+      }
       return {
         ok: false,
         status: "error",

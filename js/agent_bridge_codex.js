@@ -98,9 +98,40 @@
     entry.lastCodexAnswerChunk = text;
     pushEvent(entry, "answer/chunk", {
       text: text,
+      phase: "final_answer",
       source: source || "codex",
       provider: "codex"
     });
+  }
+
+  function codexAgentMessageLooksFinal(text, phase) {
+    var p = String(phase || "").toLowerCase();
+    if (p === "final_answer") {
+      return true;
+    }
+    if (p === "commentary") {
+      return false;
+    }
+    var raw = String(text || "");
+    var compact = trim(raw.replace(/\s+/g, " "));
+    if (!compact.length) {
+      return false;
+    }
+    var lower = compact.toLowerCase();
+    if (lower.indexOf("projets ouverts") === 0 || lower.indexOf("open projects") === 0) {
+      return true;
+    }
+    if (lower.indexOf("aucune modification effectu") !== -1 || lower.indexOf("no change") !== -1) {
+      return true;
+    }
+    if (lower.indexOf("validation faite") !== -1 || lower.indexOf("validated") !== -1) {
+      return true;
+    }
+    var bulletCount = (raw.match(/\n\s*[-*]\s+/g) || []).length;
+    if (bulletCount >= 3) {
+      return true;
+    }
+    return compact.length >= 220 && (compact.indexOf(" - ") !== -1 || compact.indexOf(";") !== -1);
   }
 
   function pushCodexTurnEnd(entry, data) {
@@ -138,7 +169,7 @@
     if (payloadType === "agent_message") {
       var text = trim(payload.message || payload.text || codexContentText(payload.content));
       var phase = String(payload.phase || "");
-      if (phase === "final_answer") {
+      if (codexAgentMessageLooksFinal(text, phase)) {
         pushCodexAnswer(entry, text, "event_msg");
       } else {
         pushCodexProgress(entry, text, phase, "event_msg");
@@ -238,6 +269,9 @@
       return;
     }
     if (streamName !== "stdout" && streamName !== "codex-session") {
+      if (streamName === "stderr") {
+        entry.lastError = text;
+      }
       pushEvent(entry, streamName, { line: text });
       return;
     }
@@ -279,7 +313,12 @@
       var itemText = codexItemText(item);
       if (itemType === "agent_message") {
         if (itemText.length) {
-          pushCodexProgress(entry, itemText, "commentary", "item");
+          var itemPhase = String(item.phase || (item.metadata && item.metadata.phase) || "");
+          if (codexAgentMessageLooksFinal(itemText, itemPhase)) {
+            pushCodexAnswer(entry, itemText, "item");
+          } else {
+            pushCodexProgress(entry, itemText, itemPhase || "commentary", "item");
+          }
         }
         return;
       }
@@ -614,9 +653,6 @@
       }
       setup = detectCodexRuntime(options);
     }
-    if (setup.codex.found && setup.home.path.length && !setup.mcp.hasConvertigo) {
-      messages.push("Scoped CODEX_HOME does not list the Convertigo MCP server after bootstrap.");
-    }
     var skills = installAgentSkills(options, "codex", setup.codexHome || setup.home.path);
     if (skills.message) {
       messages.push(skills.message);
@@ -624,9 +660,16 @@
     if (skills.error) {
       messages.push(skills.error);
     }
+    if (skills.ok === true) {
+      setup = detectCodexRuntime(options);
+    }
+    if (setup.codex.found && !setup.mcp.hasConvertigo) {
+      messages.push("Codex does not list the Convertigo MCP server after setup.");
+    }
+    var ready = setup.codex.found && !setup.home.error.length && skills.ok === true && setup.mcp.hasConvertigo === true;
     return {
-      ok: setup.codex.found && !setup.home.error.length,
-      status: setup.codex.found ? "ready" : "missing",
+      ok: ready,
+      status: ready ? "ready" : "missing",
       setup: setup,
       installation: installation,
       bootstrap: bootstrap,
@@ -649,6 +692,27 @@
       }],
       injectedKeys: []
     };
+  }
+
+  function copyEnvObject(env) {
+    var out = {};
+    env = env || {};
+    for (var key in env) {
+      if (Object.prototype.hasOwnProperty.call(env, key)) {
+        out[key] = env[key];
+      }
+    }
+    return out;
+  }
+
+  function mergeEnvObject(target, source) {
+    source = source || {};
+    for (var key in source) {
+      if (Object.prototype.hasOwnProperty.call(source, key) && source[key] !== null && typeof source[key] !== "undefined") {
+        target[key] = source[key];
+      }
+    }
+    return target;
   }
 
   function codexCommand(baseCommand, entry, options, promptText) {
@@ -755,6 +819,7 @@
     var ttlMillis = intValue(options.ttlSeconds, DEFAULT_TTL_SECONDS, 30, 86400) * 1000;
     var credentials = codexCredentials(options, setup.setup.home);
     var entry = createEntry(handle, "codex", "codex-jsonl", [], cwd, env, ttlMillis, setup.setup.home, credentials, options.model || options.agentModel);
+    entry.baseEnv = copyEnvObject(env);
     entry.status = "ready";
     entry.phase = "ready";
     entry.sessionId = trim(options.codexThreadId || options.sessionId || options.externalSessionId);
@@ -811,7 +876,7 @@
     if (trim(options.model || options.agentModel).length) {
       entry.model = trim(options.model || options.agentModel);
     }
-    var env = parseObject(options.env, {});
+    var env = mergeEnvObject(copyEnvObject(entry.baseEnv), parseObject(options.env, {}));
     if (entry.home && entry.home.path) {
       env.CODEX_HOME = entry.home.path;
     }

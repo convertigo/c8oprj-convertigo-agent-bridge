@@ -161,6 +161,19 @@
     paths.push(value);
   }
 
+  function commandPathStartsWith(command, directory) {
+    var path = trim(command && command.path);
+    var root = trim(directory);
+    if (!path.length || !root.length) {
+      return false;
+    }
+    try {
+      path = filePath(new File(path));
+      root = filePath(new File(root));
+    } catch (_ignoreCommandPathStartsWith) {}
+    return path === root || path.indexOf(root + File.separator) === 0 || path.indexOf(root + "/") === 0;
+  }
+
   function nodeRuntimeSearchPath(options) {
     options = options || {};
     var paths = [];
@@ -440,7 +453,285 @@
     ].join("\n");
   }
 
+  function defaultCodexHomePath() {
+    return childPath(String(System.getProperty("user.home")), ".codex");
+  }
+
+  function effectiveCodexHomePath(homePath) {
+    var home = trim(homePath);
+    return home.length ? home : defaultCodexHomePath();
+  }
+
+  function tomlEscape(value) {
+    return String(value == null ? "" : value)
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"');
+  }
+
+  function splitTextLines(text) {
+    return String(text == null ? "" : text).replace(/\r\n?/g, "\n").split("\n");
+  }
+
+  function findTomlSectionRange(lines, sectionName) {
+    var header = "[" + sectionName + "]";
+    var start = -1;
+    var end = lines.length;
+    for (var i = 0; i < lines.length; i++) {
+      if (trim(lines[i]) === header) {
+        start = i;
+        break;
+      }
+    }
+    if (start < 0) {
+      return { found: false, start: -1, end: -1 };
+    }
+    for (var j = start + 1; j < lines.length; j++) {
+      if (/^\s*\[.+\]\s*$/.test(lines[j])) {
+        end = j;
+        break;
+      }
+    }
+    return { found: true, start: start, end: end };
+  }
+
+  function patchCodexMcpConfigText(existingText, mcpEndpoint) {
+    var text = String(existingText == null ? "" : existingText).replace(/\r\n?/g, "\n");
+    var lines = splitTextLines(text);
+    var range = findTomlSectionRange(lines, "mcp_servers.convertigo");
+    var urlLine = 'url = "' + tomlEscape(mcpEndpoint) + '"';
+    var timeoutLine = "startup_timeout_sec = 60";
+    var status = "unchanged";
+
+    if (!range.found) {
+      if (lines.length && trim(lines[lines.length - 1]).length) {
+        lines.push("");
+      }
+      lines.push("[mcp_servers.convertigo]");
+      lines.push(urlLine);
+      lines.push(timeoutLine);
+      status = text.length ? "updated" : "created";
+      return {
+        status: status,
+        text: lines.join("\n").replace(/\n+$/, "\n")
+      };
+    }
+
+    var sectionLines = lines.slice(range.start, range.end);
+    var replacedUrl = false;
+    var replacedTimeout = false;
+    for (var i = 1; i < sectionLines.length; i++) {
+      if (/^\s*url\s*=/.test(sectionLines[i])) {
+        if (trim(sectionLines[i]) !== urlLine) {
+          sectionLines[i] = urlLine;
+          status = "updated";
+        }
+        replacedUrl = true;
+        continue;
+      }
+      if (/^\s*startup_timeout_sec\s*=/.test(sectionLines[i])) {
+        if (trim(sectionLines[i]) !== timeoutLine) {
+          sectionLines[i] = timeoutLine;
+          status = "updated";
+        }
+        replacedTimeout = true;
+      }
+    }
+    if (!replacedUrl) {
+      sectionLines.splice(1, 0, urlLine);
+      status = "updated";
+    }
+    if (!replacedTimeout) {
+      sectionLines.splice(replacedUrl ? 2 : 2, 0, timeoutLine);
+      status = "updated";
+    }
+    var nextText = lines.slice(0, range.start).concat(sectionLines).concat(lines.slice(range.end)).join("\n").replace(/\n+$/, "\n");
+    if (nextText === text.replace(/\n+$/, "\n")) {
+      status = "unchanged";
+    }
+    return {
+      status: status,
+      text: nextText
+    };
+  }
+
+  function writeManagedTextFile(file, content, dryRun) {
+    var existed = file.isFile();
+    var previous = readTextFile(file);
+    var next = String(content == null ? "" : content);
+    if (previous === next) {
+      return {
+        status: "unchanged",
+        existed: existed
+      };
+    }
+    if (dryRun !== true) {
+      writeTextFile(file, next);
+    }
+    return {
+      status: existed ? "updated" : "created",
+      existed: existed
+    };
+  }
+
+  function convertigoGeneralistReferenceLines() {
+    return [
+      "- `convertigo://capabilities` - Convertigo MCP capabilities: Core MCP capabilities and recommended authoring flow.",
+      "- `convertigo://recipes/quickstart` - Convertigo MCP quickstart recipes: Minimal MCP-first recipes for fast project delivery.",
+      "- `convertigo://resources/convertigo-start` - Convertigo Start Guide: Canonical entry guide for tree-first Convertigo MCP work.",
+      "- `convertigo://resources/convertigo-crud-fastpath` - Convertigo CRUD Fast Path: Recommended mono-agent path for deterministic SQL CRUD plus starter NGX UI work.",
+      "- `convertigo-quickstart` - Convertigo MCP Quickstart: Bootstrap guide selection and route standard SQL CRUD + starter NGX work to the fast path.",
+      "- `convertigo-crud-fastpath` - Convertigo CRUD Fast Path: Recommended mono-agent rail for deterministic SQL CRUD plus starter NGX UI work."
+    ];
+  }
+
+  function buildConvertigoGeneralistSkill(mcpEndpoint) {
+    return [
+      "---",
+      "name: convertigo-generalist",
+      "description: Bootstrap Codex for general Convertigo work. Use it to discover Convertigo MCP guides first, choose between exploratory work and the CRUD fast path, and apply the correct naming and viewer rules.",
+      "---",
+      "",
+      "# Convertigo Generalist",
+      "",
+      "Use this skill for general Convertigo work. Keep it procedural and rely on the MCP guides for the detailed knowledge.",
+      "",
+      "## Mandatory bootstrap",
+      "",
+      "1. Call `resources/list`.",
+      "2. If the caller surface exposes it, call `prompts/list`.",
+      "3. Read `convertigo://capabilities`.",
+      "4. Read `convertigo://recipes/quickstart`.",
+      "5. Read `convertigo://resources/convertigo-start`.",
+      "6. Only then decide the route:",
+      "   - Standard SQL CRUD + starter NGX UI: read `convertigo://resources/convertigo-crud-fastpath` and use `convertigo-crud-fastpath`.",
+      "   - Existing deterministic CRUD project edits: also read `convertigo://resources/convertigo-crud-edit-fastpath`, then stay on the CRUD rail without replaying the new-project bootstrap.",
+      "   - Non-CRUD work or tasks outside the deterministic rail: stay exploratory and follow `convertigo-quickstart`.",
+      "7. Do not call `rag-query` before the start guide and the chosen recipe were read.",
+      "8. If the user explicitly wants MCP-only work or the starting workspace is empty/non-relevant, do not inspect the local shell workspace before the MCP route decision is made.",
+      "",
+      "## CRUD routing",
+      "",
+      "- Do not ask the user to choose `upsert-crud`.",
+      "- Decide it yourself: use the CRUD rail only when the task is a standard SQL CRUD + starter NGX UI fit.",
+      "- Generic CRUD UI default: `ui.variant=entity-pages`.",
+      "- CRM-specific UI default: `ui.variant=master-detail`.",
+      "- For a new UI project, validate the name, run `marketplace-import` with that exact name, open the viewer immediately with `mobile-builder-open`, then continue with `upsert-crud` and the staged UI kit.",
+      "- For an existing deterministic CRUD project that is already green, use the edit rail: `crud-status` -> `upsert-crud` -> backend `crud-proof` -> one `upsert-ngx-crud-kit stage=final` -> `mobile-builder-open` -> final `crud-proof(viewerUrl)` -> optional `project-save`.",
+      "- For a low-detail CRUD prompt, stop after the first green scaffold + demo data: starter import, viewer open, `upsert-crud`, backend proof, `upsert-ngx-crud-kit` bootstrap/final, final UI proof, optional `project-save`, then return.",
+      "- When relations are obvious, declare them explicitly in `spec.relations[]` instead of relying only on flat FK fields. Prefer entity UI hints such as `ui.relationFields` over direct edits on generated CRUD-kit components.",
+      "- Prefer `seed.data` for explicit business demo rows. Do not patch `init_schema` manually after generation when `seed.data` can express the dataset in the spec.",
+      "- Once the CRUD guides already documented the contract, do not grep the local workspace to rediscover the shapes of `relations[]`, `ui.relationFields`, or `seed.data`.",
+      "- Generated CRUD facade sequences are hidden requestables that require an authenticated context. The generated UI now initializes that session once through a `Login` page that calls `auth_login(username,password)` and then redirects to the visible home page; the business pages should only bootstrap the CRUD data they need.",
+      "- Do not start a second refinement pass on screens, layout, labels, or field-level UX unless the user explicitly asked for it.",
+      "- Once the CRUD fast path is chosen, do not call `rag-query` unless the built-in guides and CRUD tools are no longer sufficient.",
+      "- Prefer best-case-first generated code. Trust the standard error bubble for normal failures instead of adding defensive wrappers by default.",
+      "",
+      "## Project naming",
+      "",
+      "- Use exactly the project name requested by the user when it is technically valid.",
+      "- Do not invent prefixes, suffixes, or dates.",
+      "- If the requested name collides with an existing project, surface the collision explicitly instead of renaming it.",
+      "",
+      "## Viewer rule",
+      "",
+      "- In dev, `mobile-builder-open` serves the live app from the viewer root. Prefer `viewerHomeUrl`, or fall back to `viewerBaseUrl`.",
+      "- Do not open `DisplayObjects/mobile/...` against the live HMR viewer.",
+      "- In prod, the application URL is `.../DisplayObjects/mobile/home`.",
+      "- If `mobile-builder-open` reports `compile_error`, treat that as a generator or source-object issue. Do not patch generated runtime sources.",
+      "",
+      "## MCP-only boundary",
+      "",
+      "- Never edit or repair `_private/ionic`, `DisplayObjects`, `dist`, or other generated artifacts.",
+      "- Generated artifacts are diagnostic-only surfaces. Fix the Convertigo source objects or the MCP generator instead.",
+      "- Do not run `npm run build` or other manual frontend builds outside MCP to close a task.",
+      "",
+      "## Seed and visible data",
+      "",
+      "- Prefer realistic seed data by default.",
+      "- Prefer semantic preview fields such as `name`, `title`, `city`, `email`, or `comment` over `id` when a visible choice exists.",
+      "",
+      "## Current public references",
+      ""
+    ].concat(convertigoGeneralistReferenceLines()).concat([
+      "",
+      "## Local MCP endpoint",
+      "",
+      "- Expected local MCP entry: `" + trim(mcpEndpoint) + "`",
+      "- If Codex is not yet configured for Convertigo, run the local Studio sequence `_setupCodex` from the ConvertigoMCP project.",
+      ""
+    ]).join("\n");
+  }
+
+  function setupCodexGeneralist(options, homePath, mcpEndpoint) {
+    var report = {
+      attempted: false,
+      ok: true,
+      provider: "codex",
+      source: "ConvertigoMCP._setupCodex-compatible",
+      target: "",
+      skillStatus: "skipped",
+      configStatus: "skipped",
+      resolvedCodexHome: "",
+      resolvedMcpUrl: trim(mcpEndpoint) || resolveMcpEndpoint(options),
+      skillPath: "",
+      warnings: [],
+      nextSteps: [
+        "Restart Codex to pick up the updated skill list.",
+        "Start a fresh Codex session in the Convertigo workspace.",
+        "Use the generated convertigo-generalist skill for general Convertigo work."
+      ],
+      dryRun: boolValue(options.dryRun, false),
+      skipped: false,
+      message: "",
+      error: "",
+      generated: [],
+      reused: [],
+      copied: []
+    };
+    if (boolValue(options.skipSkillsInstall || options.skipSkillSync, false)) {
+      report.skipped = true;
+      report.message = "Convertigo Generalist setup disabled by request";
+      return report;
+    }
+    report.attempted = true;
+    try {
+      var codexHome = new File(effectiveCodexHomePath(homePath));
+      var skillFile = new File(new File(new File(codexHome, "skills"), "convertigo-generalist"), "SKILL.md");
+      var configFile = new File(codexHome, "config.toml");
+      var skillWrite = writeManagedTextFile(skillFile, buildConvertigoGeneralistSkill(report.resolvedMcpUrl), report.dryRun);
+      var existingConfig = readTextFile(configFile);
+      var patchedConfig = patchCodexMcpConfigText(existingConfig, report.resolvedMcpUrl);
+      if (patchedConfig.status !== "unchanged" && report.dryRun !== true) {
+        writeTextFile(configFile, patchedConfig.text);
+      }
+      report.skillStatus = skillWrite.status;
+      report.configStatus = patchedConfig.status;
+      report.resolvedCodexHome = filePath(codexHome);
+      report.target = report.resolvedCodexHome;
+      report.skillPath = filePath(skillFile);
+      if (skillWrite.status === "unchanged") {
+        report.reused.push("skills/convertigo-generalist/SKILL.md");
+      } else {
+        report.generated.push("skills/convertigo-generalist/SKILL.md");
+      }
+      if (patchedConfig.status === "unchanged") {
+        report.reused.push("config.toml");
+      } else {
+        report.generated.push("config.toml");
+      }
+      report.message = "Convertigo Generalist skill configured";
+    } catch (e) {
+      report.ok = false;
+      report.error = String(e);
+      report.message = "Unable to configure Convertigo Generalist skill";
+    }
+    return report;
+  }
+
   function installAgentSkills(options, provider, homePath) {
+    if (normalizeProvider(provider) === "codex") {
+      return setupCodexGeneralist(options || {}, homePath, resolveMcpEndpoint(options || {}));
+    }
     var report = {
       attempted: false,
       ok: true,
@@ -1536,7 +1827,9 @@
     options = options || {};
     var before = detectCodexRuntime(options);
     var force = boolValue(options.forceCodexInstall || options.forceInstall || options.force, false);
-    if (before.codex.found && !force) {
+    var workspaceFirstOption = typeof options.workspaceInstallFirst !== "undefined" ? options.workspaceInstallFirst : options.preferWorkspaceInstall;
+    var workspaceFirst = boolValue(typeof workspaceFirstOption === "undefined" ? true : workspaceFirstOption, true);
+    if (before.codex.found && !force && (!workspaceFirst || commandPathStartsWith(before.codex, before.installDir))) {
       return {
         attempted: false,
         installed: false,
@@ -1558,7 +1851,7 @@
     var steps = [];
     try {
       before = detectCodexRuntime(options);
-      if (before.codex.found && !force) {
+      if (before.codex.found && !force && (!workspaceFirst || commandPathStartsWith(before.codex, before.installDir))) {
         return {
           attempted: true,
           installed: false,
@@ -1572,40 +1865,61 @@
           timestamp: now()
         };
       }
-      ensureDirectory(new File(before.installDir));
-      var npmPrefix = childPath(before.installDir, "npm");
-      ensureDirectory(new File(npmPrefix));
-      var npmRuntime = ensureNpmRuntime(options);
-      var packageSpec = codexPackageSpec(options);
-      var install = runNpmInstall(npmRuntime.npm, packageSpec, npmPrefix, options);
-      steps.push({ action: "npm_install", package: packageSpec, prefix: npmPrefix, result: install });
-      if (!install.ok) {
-        throw new Error("Unable to install Codex CLI with npm: " + (install.stderr || install.stdout || install.error));
-      }
-      var afterOptions = {};
-      for (var key in options) {
-        if (Object.prototype.hasOwnProperty.call(options, key)) {
-          afterOptions[key] = options[key];
+      var fallbackCodex = before.codex.found && !commandPathStartsWith(before.codex, before.installDir) ? before.codex : null;
+      try {
+        ensureDirectory(new File(before.installDir));
+        var npmPrefix = childPath(before.installDir, "npm");
+        ensureDirectory(new File(npmPrefix));
+        var npmRuntime = ensureNpmRuntime(options);
+        var packageSpec = codexPackageSpec(options);
+        var install = runNpmInstall(npmRuntime.npm, packageSpec, npmPrefix, options);
+        steps.push({ action: "npm_install", package: packageSpec, prefix: npmPrefix, result: install });
+        if (!install.ok) {
+          throw new Error("Unable to install Codex CLI with npm: " + (install.stderr || install.stdout || install.error));
         }
+        var afterOptions = {};
+        for (var key in options) {
+          if (Object.prototype.hasOwnProperty.call(options, key)) {
+            afterOptions[key] = options[key];
+          }
+        }
+        afterOptions.codexPath = codexLocalBin(before.installDir);
+        var after = detectCodexRuntime(afterOptions);
+        if (!after.codex.found) {
+          throw new Error("Codex CLI package was installed but no runnable codex executable was found");
+        }
+        return {
+          attempted: true,
+          installed: true,
+          reused: false,
+          method: "npm",
+          package: packageSpec,
+          npm: npmRuntime,
+          before: before.codex,
+          codex: after.codex,
+          codexPath: after.codex.path,
+          steps: steps,
+          timestamp: now()
+        };
+      } catch (installError) {
+        if (workspaceFirst && fallbackCodex !== null && !force) {
+          return {
+            attempted: true,
+            installed: false,
+            reused: true,
+            method: "workspace_install_failed_user_fallback",
+            package: codexPackageSpec(options),
+            npm: null,
+            before: before.codex,
+            codex: fallbackCodex,
+            codexPath: fallbackCodex.path,
+            steps: steps,
+            error: String(installError),
+            timestamp: now()
+          };
+        }
+        throw installError;
       }
-      afterOptions.codexPath = codexLocalBin(before.installDir);
-      var after = detectCodexRuntime(afterOptions);
-      if (!after.codex.found) {
-        throw new Error("Codex CLI package was installed but no runnable codex executable was found");
-      }
-      return {
-        attempted: true,
-        installed: true,
-        reused: false,
-        method: "npm",
-        package: packageSpec,
-        npm: npmRuntime,
-        before: before.codex,
-        codex: after.codex,
-        codexPath: after.codex.path,
-        steps: steps,
-        timestamp: now()
-      };
     } finally {
       lock.release();
     }
@@ -1905,7 +2219,8 @@
       mcp.stdout = mcpProbe.stdout;
       mcp.stderr = mcpProbe.stderr;
       mcp.error = mcpProbe.error;
-      mcp.hasConvertigo = (mcpProbe.stdout || "").indexOf("convertigo") >= 0 || (mcpProbe.stderr || "").indexOf("convertigo") >= 0;
+      var mcpText = String((mcpProbe.stdout || "") + "\n" + (mcpProbe.stderr || "")).toLowerCase();
+      mcp.hasConvertigo = mcpText.indexOf("convertigo") >= 0;
     }
     return {
       workspaceRoot: workspaceRoot,
