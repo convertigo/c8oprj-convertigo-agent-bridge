@@ -9,6 +9,8 @@ comment: Send a prompt to Codex CLI through codex exec --json. Poll agent_events
       sessionId: typeof sessionId === "undefined" ? "" : sessionId,
       externalSessionId: typeof externalSessionId === "undefined" ? "" : externalSessionId,
       model: typeof model === "undefined" ? "" : model,
+      reasoningEffort: typeof reasoningEffort === "undefined" ? "" : reasoningEffort,
+      serviceTier: typeof serviceTier === "undefined" ? "" : serviceTier,
       bypassApprovalsAndSandbox: typeof bypassApprovalsAndSandbox === "undefined" ? "" : bypassApprovalsAndSandbox,
       sandbox: typeof sandbox === "undefined" ? "" : sandbox
     });'
@@ -49,3 +51,9 @@ comment: Send a prompt to Codex CLI through codex exec --json. Poll agent_events
 ↓sandbox [variables.RequestableVariable-1781693000310]: 
   comment: Optional sandbox mode used only when bypassApprovalsAndSandbox is false.
   description: Optional sandbox mode used only when bypassApprovalsAndSandbox is false.
+↓reasoningEffort [variables.RequestableVariable-1782119617563]: 
+  comment: 'Optional Codex reasoning effort override: low, medium, high, or xhigh.'
+  description: 'Optional Codex reasoning effort override: low, medium, high, or xhigh.'
+↓serviceTier [variables.RequestableVariable-1782119617587]: 
+  comment: Optional Codex service tier override, such as priority.
+  description: Optional Codex service tier override, such as priority.

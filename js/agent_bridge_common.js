@@ -1433,17 +1433,80 @@
       var finished = process.waitFor(options && options.timeoutMs ? options.timeoutMs : 15000, TimeUnit.MILLISECONDS);
       if (!finished) {
         process.destroyForcibly();
+        try { process.waitFor(2, TimeUnit.SECONDS); } catch (_ignoreDestroyedWait) {}
         result.error = "timeout";
       }
-      result.exitCode = process.exitValue();
+      try {
+        result.exitCode = process.exitValue();
+      } catch (_ignoreExitValue) {
+        result.exitCode = -1;
+      }
       result.stdout = drainReader(outReader, 16000);
       result.stderr = drainReader(errReader, 16000);
-      result.ok = result.exitCode === 0;
+      result.ok = finished && result.exitCode === 0;
     } catch (e) {
       result.error = String(e);
     }
     result.durationMs = now() - startedAt;
     return result;
+  }
+
+  function runCommandCaptured(args, options) {
+    var startedAt = now();
+    var result = {
+      command: args.join(" "),
+      exitCode: -1,
+      stdout: "",
+      stderr: "",
+      durationMs: 0,
+      ok: false,
+      error: ""
+    };
+    var outFile = null;
+    var errFile = null;
+    try {
+      outFile = File.createTempFile("c8o-agent-bridge-out-", ".log");
+      errFile = File.createTempFile("c8o-agent-bridge-err-", ".log");
+      var pb = new ProcessBuilder(toJavaList(args));
+      if (options && options.cwd) {
+        pb.directory(new File(String(options.cwd)));
+      }
+      if (options && options.env) {
+        envObjectToMap(pb.environment(), options.env);
+      }
+      pb.redirectOutput(outFile);
+      pb.redirectError(errFile);
+      var process = pb.start();
+      var finished = process.waitFor(options && options.timeoutMs ? options.timeoutMs : 15000, TimeUnit.MILLISECONDS);
+      if (!finished) {
+        process.destroyForcibly();
+        try { process.waitFor(2, TimeUnit.SECONDS); } catch (_ignoreCapturedDestroyedWait) {}
+        result.error = "timeout";
+      }
+      try {
+        result.exitCode = process.exitValue();
+      } catch (_ignoreCapturedExitValue) {
+        result.exitCode = -1;
+      }
+      result.stdout = readTextFile(outFile);
+      result.stderr = readTextFile(errFile);
+      result.ok = finished && result.exitCode === 0;
+    } catch (e) {
+      result.error = String(e);
+    } finally {
+      try { if (outFile !== null) { Files.deleteIfExists(outFile.toPath()); } } catch (_ignoreOutDelete) {}
+      try { if (errFile !== null) { Files.deleteIfExists(errFile.toPath()); } } catch (_ignoreErrDelete) {}
+    }
+    result.durationMs = now() - startedAt;
+    return result;
+  }
+
+  function parseJsonSafe(text, fallback) {
+    try {
+      return JSON.parse(String(text || ""));
+    } catch (_ignoreJsonParse) {
+      return fallback;
+    }
   }
 
   function runProcessBuilder(pb, options) {
@@ -2281,6 +2344,367 @@
     };
   }
 
+  function codexRuntimeEnv(options, codexHomePath) {
+    var env = {};
+    var path = nodeRuntimeSearchPath(options || {});
+    if (path.length) {
+      env.PATH = path + String(File.pathSeparator) + String(System.getenv("PATH") || "");
+    }
+    if (trim(codexHomePath).length) {
+      env.CODEX_HOME = trim(codexHomePath);
+    }
+    return env;
+  }
+
+  function normalizeCodexReasoningEffort(value) {
+    var effort = trim(value).toLowerCase();
+    if (!effort.length || effort === "default" || effort === "auto") {
+      return "";
+    }
+    if (effort === "very-high" || effort === "very_high" || effort === "extra-high" || effort === "extra_high") {
+      return "xhigh";
+    }
+    if (effort === "low" || effort === "medium" || effort === "high" || effort === "xhigh") {
+      return effort;
+    }
+    return effort;
+  }
+
+  function codexReasoningLabel(effort) {
+    var value = normalizeCodexReasoningEffort(effort);
+    if (value === "low") {
+      return "Low";
+    }
+    if (value === "medium") {
+      return "Medium";
+    }
+    if (value === "high") {
+      return "High";
+    }
+    if (value === "xhigh") {
+      return "Very high";
+    }
+    return value;
+  }
+
+  function normalizeCodexReasoningLevels(levels) {
+    var out = [];
+    var seen = {};
+    levels = levels || [];
+    for (var i = 0; i < levels.length; i++) {
+      var item = levels[i] || {};
+      var effort = normalizeCodexReasoningEffort(item.effort || item.id || item.name);
+      if (!effort.length || seen[effort]) {
+        continue;
+      }
+      seen[effort] = true;
+      out.push({
+        id: effort,
+        label: codexReasoningLabel(effort),
+        description: String(item.description || "")
+      });
+    }
+    return out;
+  }
+
+  function normalizeCodexServiceTiers(model) {
+    var tiers = [];
+    var seen = {};
+    var raw = (model && model.service_tiers) || [];
+    for (var i = 0; i < raw.length; i++) {
+      var item = raw[i] || {};
+      var id = trim(item.id || item.name);
+      if (!id.length || seen[id]) {
+        continue;
+      }
+      seen[id] = true;
+      tiers.push({
+        id: id,
+        label: String(item.name || id),
+        description: String(item.description || "")
+      });
+    }
+    return tiers;
+  }
+
+  function normalizeCodexModelCatalog(catalog) {
+    var models = [];
+    var raw = catalog && catalog.models ? catalog.models : [];
+    for (var i = 0; i < raw.length; i++) {
+      var item = raw[i] || {};
+      var id = trim(item.slug || item.id || item.name);
+      if (!id.length || trim(item.visibility).toLowerCase() === "hide") {
+        continue;
+      }
+      var reasoning = normalizeCodexReasoningLevels(item.supported_reasoning_levels || item.supportedReasoningLevels);
+      var defaultReasoning = normalizeCodexReasoningEffort(item.default_reasoning_level || item.defaultReasoningLevel);
+      models.push({
+        id: id,
+        label: String(item.display_name || item.displayName || id),
+        description: String(item.description || ""),
+        defaultReasoning: defaultReasoning,
+        reasoningLevels: reasoning,
+        serviceTiers: normalizeCodexServiceTiers(item),
+        speedTiers: item.additional_speed_tiers || item.additionalSpeedTiers || [],
+        priority: intValue(item.priority, 9999, -9999, 999999)
+      });
+    }
+    models.sort(function (a, b) {
+      if (a.priority !== b.priority) {
+        return a.priority - b.priority;
+      }
+      return a.label < b.label ? -1 : (a.label > b.label ? 1 : 0);
+    });
+    return models;
+  }
+
+  function compactCommandStatus(command) {
+    command = command || {};
+    return {
+      found: command.found === true,
+      path: String(command.path || ""),
+      version: String(command.version || ""),
+      error: String(command.error || "")
+    };
+  }
+
+  function compactVibeConfig(config) {
+    config = config || {};
+    return {
+      path: String(config.path || ""),
+      exists: config.exists === true,
+      hasConvertigoServer: config.hasConvertigoServer === true,
+      hasHttpTransport: config.hasHttpTransport === true,
+      endpoint: String(config.endpoint || ""),
+      valid: config.valid === true
+    };
+  }
+
+  function compactCodexSetup(setup) {
+    setup = setup || {};
+    var mcp = setup.mcp || {};
+    return {
+      workspaceRoot: String(setup.workspaceRoot || ""),
+      installDir: String(setup.installDir || ""),
+      codexHome: String(setup.codexHome || ""),
+      home: setup.home || {},
+      mcpEndpoint: String(setup.mcpEndpoint || ""),
+      codex: compactCommandStatus(setup.codex),
+      mcp: {
+        checked: mcp.checked === true,
+        ok: mcp.ok === true,
+        hasConvertigo: mcp.hasConvertigo === true,
+        error: String(mcp.error || "")
+      }
+    };
+  }
+
+  function compactVibeSetup(setup) {
+    setup = setup || {};
+    var config = setup.config || {};
+    return {
+      workspaceRoot: String(setup.workspaceRoot || ""),
+      installDir: String(setup.installDir || ""),
+      venvDir: String(setup.venvDir || ""),
+      vibeHome: String(setup.vibeHome || ""),
+      home: setup.home || {},
+      mcpEndpoint: String(setup.mcpEndpoint || ""),
+      model: String(setup.model || ""),
+      python: compactCommandStatus(setup.python),
+      uv: compactCommandStatus(setup.uv),
+      vibe: compactCommandStatus(setup.vibe),
+      vibeAcp: compactCommandStatus(setup.vibeAcp),
+      config: {
+        selected: compactVibeConfig(config.selected),
+        user: compactVibeConfig(config.user)
+      }
+    };
+  }
+
+  function codexSettings(options) {
+    options = options || {};
+    var setup = detectCodexRuntime(options);
+    var source = {
+      type: "cli",
+      command: setup.codex.found ? setup.codex.path + " debug models" : "codex debug models",
+      ok: false,
+      exitCode: -1,
+      error: "",
+      stderr: ""
+    };
+    var models = [];
+    if (setup.codex.found) {
+      var probe = runCommandCaptured([setup.codex.path, "debug", "models"], {
+        timeoutMs: intValue(options.settingsTimeoutMs || options.modelsTimeoutMs, 60000, 1000, 180000),
+        env: codexRuntimeEnv(options, setup.codexHome)
+      });
+      source.ok = probe.ok;
+      source.exitCode = probe.exitCode;
+      source.error = probe.error;
+      source.stderr = probe.stderr;
+      if (probe.ok) {
+        models = normalizeCodexModelCatalog(parseJsonSafe(probe.stdout, {}));
+      }
+    } else {
+      source.error = "Codex CLI not found";
+    }
+    var defaultModel = models.length ? models[0].id : "";
+    return {
+      id: "codex",
+      label: "Codex",
+      status: setup.codex.found ? "ready" : "missing",
+      ready: setup.codex.found === true,
+      setup: compactCodexSetup(setup),
+      source: source,
+      defaultModel: defaultModel,
+      models: models,
+      reasoningMode: "per_model",
+      supports: {
+        resume: true,
+        stop: true,
+        images: true,
+        mcp: setup.mcp.hasConvertigo === true,
+        reasoning: true,
+        serviceTier: true
+      }
+    };
+  }
+
+  function parseTomlValue(text, key) {
+    var pattern = new RegExp("^\\s*" + key + "\\s*=\\s*['\\\"]?([^'\\\"\\n#]+)", "m");
+    var match = String(text || "").match(pattern);
+    return match ? trim(match[1]) : "";
+  }
+
+  function parseVibeModelsFromConfig(file) {
+    var result = {
+      path: filePath(file),
+      exists: file.exists(),
+      activeModel: "",
+      models: []
+    };
+    if (!result.exists) {
+      return result;
+    }
+    var text = readTextFile(file);
+    result.activeModel = parseTomlValue(text, "active_model");
+    var blockPattern = /\[\[models\]\]([\s\S]*?)(?=\n\[\[|\n\[|$)/g;
+    var blockMatch;
+    while ((blockMatch = blockPattern.exec(text)) !== null) {
+      var block = blockMatch[1];
+      var name = parseTomlValue(block, "name");
+      var alias = parseTomlValue(block, "alias");
+      var provider = parseTomlValue(block, "provider");
+      var thinking = parseTomlValue(block, "thinking");
+      var id = alias || name;
+      if (!id.length) {
+        continue;
+      }
+      result.models.push({
+        id: id,
+        label: id,
+        configuredName: name,
+        provider: provider,
+        defaultReasoning: thinking,
+        reasoningLevels: thinking.length ? [{
+          id: thinking,
+          label: thinking,
+          description: "Configured by Vibe model"
+        }] : [],
+        serviceTiers: [],
+        speedTiers: []
+      });
+    }
+    return result;
+  }
+
+  function vibeSettings(options) {
+    options = options || {};
+    var setup = detectRuntime(options);
+    var selectedFile = setup.vibeHome.length ? new File(setup.vibeHome, "config.toml") : null;
+    var selected = selectedFile !== null ? parseVibeModelsFromConfig(selectedFile) : { path: "", exists: false, activeModel: "", models: [] };
+    var user = parseVibeModelsFromConfig(new File(new File(String(System.getProperty("user.home")), ".vibe"), "config.toml"));
+    var config = selected.exists ? selected : user;
+    var models = config.models;
+    if (!models.length && setup.model) {
+      var spec = vibeModelSpec(setup.model);
+      models = [{
+        id: spec.activeModel,
+        label: spec.activeModel,
+        configuredName: spec.name,
+        provider: "mistral",
+        defaultReasoning: spec.thinking,
+        reasoningLevels: spec.thinking.length ? [{
+          id: spec.thinking,
+          label: spec.thinking,
+          description: "Configured by Vibe model"
+        }] : [],
+        serviceTiers: [],
+        speedTiers: []
+      }];
+    }
+    var defaultModel = config.activeModel || setup.model || (models.length ? models[0].id : "");
+    return {
+      id: "vibe",
+      label: "Vibe",
+      status: setup.vibe.found && setup.vibeAcp.found ? "ready" : "missing",
+      ready: setup.vibe.found === true && setup.vibeAcp.found === true,
+      setup: compactVibeSetup(setup),
+      source: {
+        type: config.exists ? "config" : "fallback",
+        path: config.path,
+        ok: config.exists || models.length > 0,
+        error: config.exists || models.length > 0 ? "" : "Vibe config has no models"
+      },
+      defaultModel: defaultModel,
+      models: models,
+      reasoningMode: "model_bound",
+      supports: {
+        resume: true,
+        stop: true,
+        images: false,
+        mcp: setup.config.selected.valid || setup.config.user.hasConvertigoServer,
+        reasoning: false,
+        serviceTier: false
+      }
+    };
+  }
+
+  C8O.agentBridge.settings = function (options) {
+    options = options || {};
+    var rawProvider = trim(options.provider || options.agent || "").toLowerCase();
+    var provider = (!rawProvider.length || rawProvider === "all" || rawProvider === "*" || rawProvider === "any") ? "" : normalizeProvider(rawProvider);
+    var providers = [];
+    if (!provider.length || provider === "codex") {
+      providers.push(codexSettings(options));
+    }
+    if (!provider.length || provider === "vibe") {
+      providers.push(vibeSettings(options));
+    }
+    var defaultProvider = providers.length ? providers[0] : null;
+    for (var i = 0; i < providers.length; i++) {
+      if (providers[i].ready === true) {
+        defaultProvider = providers[i];
+        break;
+      }
+    }
+    var defaults = {
+      provider: defaultProvider !== null ? defaultProvider.id : "",
+      model: defaultProvider !== null ? defaultProvider.defaultModel : "",
+      reasoning: ""
+    };
+    if (defaultProvider !== null && defaultProvider.models.length) {
+      defaults.reasoning = defaultProvider.models[0].defaultReasoning || "";
+    }
+    return {
+      ok: providers.length > 0,
+      status: providers.length ? "ready" : "empty",
+      defaults: defaults,
+      providers: providers,
+      timestamp: now()
+    };
+  };
+
   function envKeys(env) {
     var keys = [];
     for (var key in env) {
@@ -2799,6 +3223,8 @@
       handle: entry.handle,
       provider: entry.provider,
       model: entry.model || "",
+      reasoningEffort: entry.reasoningEffort || "",
+      serviceTier: entry.serviceTier || "",
       protocol: entry.protocol,
       status: entry.status,
       phase: entry.phase,

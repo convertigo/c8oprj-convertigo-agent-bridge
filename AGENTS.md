@@ -45,6 +45,18 @@ same context.
 - Validate Codex setup with `ConvertigoAgentBridge.agent_codex_setup` before
   debugging Assistant UI symptoms.
 
+## Current 1.2.0 Roadmap
+
+- Expose an agent settings/capabilities contract for the Assistant UI.
+- Models and reasoning choices must be discovered from the installed CLIs when
+  possible, not maintained only as Assistant-side hardcoded values.
+- The contract should describe providers, available models, default model,
+  reasoning levels, and support flags such as resume, stop, images, and MCP.
+- Codex remains the priority provider. Vibe should return a degraded but explicit
+  capability set until its CLI exposes equivalent model/settings metadata.
+- Keep the Convertigo Generalist skill synchronized and forced by setup; it
+  should not be a user-visible choice in Studio.
+
 ## Vibe Integration
 
 - Main files:
@@ -71,4 +83,3 @@ same context.
   do not invent a custom GitHub Actions build path.
 - Tags are expected to match the Convertigo project version when producing `.car`
   releases.
-

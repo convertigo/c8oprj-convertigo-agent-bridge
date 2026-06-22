@@ -4,7 +4,7 @@
   contextTimeout: 59
   corsOrigin: =Origin
   httpSessionTimeout: 600
-  version: 0.2.4
+  version: 0.2.5
   ↓void [connectors.SqlConnector]: 🗏 connectors/void.yaml
   ↓agent_codex_close [sequences.GenericSequence]: 🗏 sequences/agent_codex_close.yaml
   ↓agent_codex_prompt [sequences.GenericSequence]: 🗏 sequences/agent_codex_prompt.yaml
@@ -12,6 +12,7 @@
   ↓agent_codex_start [sequences.GenericSequence]: 🗏 sequences/agent_codex_start.yaml
   ↓agent_events [sequences.GenericSequence]: 🗏 sequences/agent_events.yaml
   ↓agent_python_setup [sequences.GenericSequence]: 🗏 sequences/agent_python_setup.yaml
+  ↓agent_settings [sequences.GenericSequence]: 🗏 sequences/agent_settings.yaml
   ↓agent_status [sequences.GenericSequence]: 🗏 sequences/agent_status.yaml
   ↓agent_sweep_expired [sequences.GenericSequence]: 🗏 sequences/agent_sweep_expired.yaml
   ↓agent_vibe_close [sequences.GenericSequence]: 🗏 sequences/agent_vibe_close.yaml

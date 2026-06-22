@@ -18,6 +18,8 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
       codexPath: typeof codexPath === "undefined" ? "" : codexPath,
       codexThreadId: typeof codexThreadId === "undefined" ? "" : codexThreadId,
       model: typeof model === "undefined" ? "" : model,
+      reasoningEffort: typeof reasoningEffort === "undefined" ? "" : reasoningEffort,
+      serviceTier: typeof serviceTier === "undefined" ? "" : serviceTier,
       install: typeof install === "undefined" ? "" : install,
       nodeVersion: typeof nodeVersion === "undefined" ? "" : nodeVersion,
       nodeDir: typeof nodeDir === "undefined" ? "" : nodeDir,
@@ -120,3 +122,9 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
   comment: When true, reinstall Codex even when an executable is already found.
   description: When true, reinstall Codex even when an executable is already found.
   schemaType: xsd:boolean
+↓reasoningEffort [variables.RequestableVariable-1782119617503]: 
+  comment: 'Optional Codex reasoning effort override: low, medium, high, or xhigh.'
+  description: 'Optional Codex reasoning effort override: low, medium, high, or xhigh.'
+↓serviceTier [variables.RequestableVariable-1782119617526]: 
+  comment: Optional Codex service tier override, such as priority.
+  description: Optional Codex service tier override, such as priority.

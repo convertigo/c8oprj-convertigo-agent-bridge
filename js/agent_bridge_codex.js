@@ -718,12 +718,22 @@
   function codexCommand(baseCommand, entry, options, promptText) {
     var command = parseCommand(options.command, [baseCommand || "codex"]);
     var model = trim(options.model);
+    var reasoningEffort = normalizeCodexReasoningEffort(options.reasoningEffort || options.reasoningLevel || options.modelReasoningEffort || entry.reasoningEffort);
+    var serviceTier = trim(options.serviceTier || options.speedTier || entry.serviceTier);
     var bypass = boolValue(options.bypassApprovalsAndSandbox, true);
     var sandbox = trim(options.sandbox);
     if (entry.sessionId.length) {
       command.push("exec");
       command.push("resume");
       command.push("--json");
+      if (reasoningEffort.length) {
+        command.push("-c");
+        command.push('model_reasoning_effort="' + tomlString(reasoningEffort) + '"');
+      }
+      if (serviceTier.length) {
+        command.push("-c");
+        command.push('service_tier="' + tomlString(serviceTier) + '"');
+      }
       if (bypass) {
         command.push("--dangerously-bypass-approvals-and-sandbox");
       }
@@ -739,6 +749,14 @@
 
     command.push("exec");
     command.push("--json");
+    if (reasoningEffort.length) {
+      command.push("-c");
+      command.push('model_reasoning_effort="' + tomlString(reasoningEffort) + '"');
+    }
+    if (serviceTier.length) {
+      command.push("-c");
+      command.push('service_tier="' + tomlString(serviceTier) + '"');
+    }
     if (bypass) {
       command.push("--dangerously-bypass-approvals-and-sandbox");
     } else if (sandbox.length) {
@@ -819,6 +837,8 @@
     var ttlMillis = intValue(options.ttlSeconds, DEFAULT_TTL_SECONDS, 30, 86400) * 1000;
     var credentials = codexCredentials(options, setup.setup.home);
     var entry = createEntry(handle, "codex", "codex-jsonl", [], cwd, env, ttlMillis, setup.setup.home, credentials, options.model || options.agentModel);
+    entry.reasoningEffort = normalizeCodexReasoningEffort(options.reasoningEffort || options.reasoningLevel || options.modelReasoningEffort);
+    entry.serviceTier = trim(options.serviceTier || options.speedTier);
     entry.baseEnv = copyEnvObject(env);
     entry.status = "ready";
     entry.phase = "ready";
@@ -835,7 +855,9 @@
       codexHome: setup.setup.codexHome,
       home: publicHomeInfo(setup.setup.home),
       resumedThreadId: entry.codexThreadId,
-      mcp: setup.setup.mcp
+      mcp: setup.setup.mcp,
+      reasoningEffort: entry.reasoningEffort,
+      serviceTier: entry.serviceTier
     });
 
     return {
@@ -876,6 +898,12 @@
     if (trim(options.model || options.agentModel).length) {
       entry.model = trim(options.model || options.agentModel);
     }
+    if (trim(options.reasoningEffort || options.reasoningLevel || options.modelReasoningEffort).length) {
+      entry.reasoningEffort = normalizeCodexReasoningEffort(options.reasoningEffort || options.reasoningLevel || options.modelReasoningEffort);
+    }
+    if (trim(options.serviceTier || options.speedTier).length) {
+      entry.serviceTier = trim(options.serviceTier || options.speedTier);
+    }
     var env = mergeEnvObject(copyEnvObject(entry.baseEnv), parseObject(options.env, {}));
     if (entry.home && entry.home.path) {
       env.CODEX_HOME = entry.home.path;
@@ -894,7 +922,9 @@
       requestId: requestId,
       provider: "codex",
       textLength: promptText.length,
-      resumedThreadId: entry.codexThreadId
+      resumedThreadId: entry.codexThreadId,
+      reasoningEffort: entry.reasoningEffort,
+      serviceTier: entry.serviceTier
     });
 
     try {

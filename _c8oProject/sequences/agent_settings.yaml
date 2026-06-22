@@ -1,0 +1,68 @@
+comment: Return available AI agent providers, models and reasoning settings discovered from local CLIs.
+responseTimeout: 120
+↓Run [steps.SimpleStep-1782118867492]: 
+  expression: |
+    'include("js/vibe_agent_bridge.js");
+    result = C8O.agentBridge.settings({
+      provider: typeof provider === "undefined" ? "" : provider,
+      workspaceRoot: typeof workspaceRoot === "undefined" ? "" : workspaceRoot,
+      projectId: typeof projectId === "undefined" ? "" : projectId,
+      userId: typeof userId === "undefined" ? "" : userId,
+      conversationId: typeof conversationId === "undefined" ? "" : conversationId,
+      mcpEndpoint: typeof mcpEndpoint === "undefined" ? "" : mcpEndpoint,
+      codexHome: typeof codexHome === "undefined" ? "" : codexHome,
+      codexHomeScope: typeof codexHomeScope === "undefined" ? "" : codexHomeScope,
+      codexPath: typeof codexPath === "undefined" ? "" : codexPath,
+      vibeHome: typeof vibeHome === "undefined" ? "" : vibeHome,
+      vibeHomeScope: typeof vibeHomeScope === "undefined" ? "" : vibeHomeScope,
+      settingsTimeoutMs: typeof settingsTimeoutMs === "undefined" ? "" : settingsTimeoutMs
+    });'
+↓result [steps.JsonToXmlStep-1782118867494]: 
+  jsonObject: 
+    - xmlizable: 
+      - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
+      - SmartType: 
+        - ↑mode: JS
+        - →→: result
+  key: 
+    - xmlizable: 
+      - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
+      - SmartType: 
+        - ↑mode: PLAIN
+        - →→: result
+↓provider [variables.RequestableVariable-1782118913728]: 
+  comment: 'Optional provider filter: codex or vibe. Empty returns all providers.'
+  description: 'Optional provider filter: codex or vibe. Empty returns all providers.'
+↓workspaceRoot [variables.RequestableVariable-1782118926928]: 
+  comment: Optional Convertigo user workspace root. Defaults to Engine.USER_WORKSPACE_PATH.
+  description: Optional Convertigo user workspace root. Defaults to Engine.USER_WORKSPACE_PATH.
+↓projectId [variables.RequestableVariable-1782118937580]: 
+  comment: Selected Convertigo project identifier.
+  description: Selected Convertigo project identifier.
+↓userId [variables.RequestableVariable-1782118948797]: 
+  comment: User identifier used for user scoped agent homes.
+  description: User identifier used for user scoped agent homes.
+↓conversationId [variables.RequestableVariable-1782118968177]: 
+  comment: Conversation identifier used for conversation scoped agent homes.
+  description: Conversation identifier used for conversation scoped agent homes.
+↓mcpEndpoint [variables.RequestableVariable-1782118990968]: 
+  comment: Optional Convertigo MCP endpoint. Defaults to the current Convertigo endpoint plus /api/mcp.
+  description: Optional Convertigo MCP endpoint. Defaults to the current Convertigo endpoint plus /api/mcp.
+↓codexHome [variables.RequestableVariable-1782119010804]: 
+  comment: Optional explicit CODEX_HOME directory.
+  description: Optional explicit CODEX_HOME directory.
+↓codexHomeScope [variables.RequestableVariable-1782119037672]: 
+  comment: 'CODEX_HOME isolation scope: default, shared, user, or conversation.'
+  description: 'CODEX_HOME isolation scope: default, shared, user, or conversation.'
+↓codexPath [variables.RequestableVariable-1782119059227]: 
+  comment: Optional Codex CLI executable path.
+  description: Optional Codex CLI executable path.
+↓vibeHome [variables.RequestableVariable-1782119073485]: 
+  comment: Optional explicit VIBE_HOME directory.
+  description: Optional explicit VIBE_HOME directory.
+↓vibeHomeScope [variables.RequestableVariable-1782119096621]: 
+  comment: 'VIBE_HOME isolation scope: shared, user, or conversation.'
+  description: 'VIBE_HOME isolation scope: shared, user, or conversation.'
+↓settingsTimeoutMs [variables.RequestableVariable-1782119115959]: 
+  comment: Timeout in milliseconds for CLI settings discovery. Defaults to 20000.
+  description: Timeout in milliseconds for CLI settings discovery.
