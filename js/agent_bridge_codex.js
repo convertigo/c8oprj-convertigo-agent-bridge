@@ -157,6 +157,35 @@
     return tool.length ? tool : server;
   }
 
+  function codexToolPreview(value) {
+    if (value === null || typeof value === "undefined") {
+      return "";
+    }
+    var text = "";
+    if (typeof value === "string") {
+      text = value;
+    } else {
+      try {
+        text = JSON.stringify(value);
+      } catch (_ignoreStringify) {
+        text = String(value);
+      }
+    }
+    text = trim(String(text).replace(/\s+/g, " "));
+    if (!text.length || text === "{}" || text === "[]") {
+      return "";
+    }
+    if (text.length > 1800) {
+      text = text.substring(0, 1797) + "...";
+    }
+    return text;
+  }
+
+  function codexToolNameFromPayload(payload) {
+    payload = payload || {};
+    return trim(payload.tool || payload.name || (payload.invocation && (payload.invocation.tool || payload.invocation.name)) || "");
+  }
+
   function handleCodexEventMessage(entry, message) {
     var payload = message.payload || {};
     var payloadType = String(payload.type || "");
@@ -180,8 +209,13 @@
       var status = payload.result && payload.result.Err ? "failed" : "completed";
       pushEvent(entry, "tool/update", {
         title: codexToolTitleFromInvocation(payload.invocation) || payload.call_id || "tool",
+        toolName: codexToolNameFromPayload(payload),
+        server: payload.invocation && payload.invocation.server ? payload.invocation.server : "",
         status: status,
         callId: payload.call_id || "",
+        invocation: payload.invocation || {},
+        result: payload.result || {},
+        detail: codexToolPreview(payload.result),
         provider: "codex"
       });
       return true;
@@ -203,17 +237,23 @@
     if (payloadType === "function_call" || payloadType === "tool_search_call") {
       pushEvent(entry, "tool/start", {
         title: codexToolTitleFromInvocation(payload) || payload.name || payloadType,
+        toolName: codexToolNameFromPayload(payload),
         status: "running",
         callId: payload.call_id || "",
+        arguments: payload.arguments || "",
+        detail: codexToolPreview(payload.arguments),
         provider: "codex"
       });
       return true;
     }
     if (payloadType === "function_call_output" || payloadType === "tool_search_output") {
       pushEvent(entry, "tool/update", {
-        title: payload.name || payload.call_id || payloadType,
+        title: payload.name || "",
+        toolName: codexToolNameFromPayload(payload),
         status: "completed",
         callId: payload.call_id || "",
+        output: payload.output || "",
+        detail: codexToolPreview(payload.output),
         provider: "codex"
       });
       return true;
@@ -337,8 +377,11 @@
       if (isCodexToolItem(itemType)) {
         pushEvent(entry, type === "item.started" ? "tool/start" : "tool/update", {
           title: codexItemTitle(item),
+          toolName: codexToolNameFromPayload(item),
           status: type === "item.completed" ? "completed" : "running",
+          callId: item.call_id || item.callId || item.id || "",
           item: item,
+          detail: codexToolPreview(item.output || item.result || item.content || item.arguments),
           provider: "codex"
         });
         return;
