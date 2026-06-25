@@ -38,6 +38,11 @@ same context.
 - Codex setup must synchronize the Convertigo Generalist skill into the managed
   `codex-home/skills/convertigo-generalist/SKILL.md` and write MCP config into
   `codex-home/config.toml`.
+- When the Assistant passes `agentProfile=nocode`, `skillProfile=nocode`,
+  `assistantContext=nocode`, or targets the `C8Oforms` project, setup must use
+  the managed `convertigo-nocode` skill instead of `convertigo-generalist`.
+  C8Oforms should also pass the authenticated `userId` and `user` home scope so
+  each user gets separate Codex/Vibe homes under the workspace agent runtime.
 - The MCP endpoint should be derived from the current Convertigo endpoint when
   possible. Local hotfix Studio commonly uses
   `http://localhost:18082/convertigo/api/mcp`; standard Studio/server ports may
@@ -64,6 +69,8 @@ same context.
   - `js/agent_bridge_vibe.js`
   - `js/vibe_agent_bridge.js`
 - Vibe conversations and homes are managed under `<workspaceRoot>/agents/vibe`.
+- In NoCode/C8Oforms contexts, Vibe should resolve home scope by user, not by
+  conversation, unless the caller explicitly overrides the scope.
 - Python/Vibe setup is separate from Codex setup. Keep the shared helper logic in
   `agent_bridge_common.js` and provider-specific behavior in the provider files.
 

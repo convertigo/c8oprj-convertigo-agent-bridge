@@ -481,24 +481,45 @@
     }
   }
 
-  function agentSkillInstructions(provider) {
+  function normalizeSkillProfile(options) {
+    options = options || {};
+    var value = trim(options.agentProfile || options.skillProfile || options.assistantContext || options.assistantSurface || options.profile).toLowerCase();
+    var project = trim(options.targetProject || options.projectName || options.projectId || options.primaryProject || resolveProjectIdOption(options)).toLowerCase();
+    if (value === "nocode" || value === "no-code" || value === "c8oforms" || value === "forms" || project === "c8oforms") {
+      return "nocode";
+    }
+    return "generalist";
+  }
+
+  function managedSkillSlug(profile) {
+    return normalizeSkillProfile({ agentProfile: profile }) === "nocode" ? "convertigo-nocode" : "convertigo-generalist";
+  }
+
+  function managedSkillLabel(profile) {
+    return normalizeSkillProfile({ agentProfile: profile }) === "nocode" ? "Convertigo NoCode" : "Convertigo Generalist";
+  }
+
+  function agentSkillInstructions(provider, profile) {
+    var isNoCode = normalizeSkillProfile({ agentProfile: profile }) === "nocode";
     return [
       "# Convertigo Agent Instructions",
       "",
       "You are running inside a Convertigo-integrated local agent session.",
       "",
-      "- Automatically follow the Convertigo Generalist workflow for Convertigo project work.",
+      isNoCode ? "- Automatically follow the Convertigo NoCode workflow for C8Oforms / No-Code Studio work." : "- Automatically follow the Convertigo Generalist workflow for Convertigo project work.",
       "- Use the Convertigo MCP/tools whenever you need to inspect, modify, save, reload, or validate Convertigo projects.",
-      "- Work on the selected project unless the user explicitly asks for another project.",
+      isNoCode ? "- Work in the C8Oforms no-code project context unless the user explicitly asks for another supported no-code context." : "- Work on the selected project unless the user explicitly asks for another project.",
       "- Prefer Convertigo objects and MCP operations. Do not edit generated folders such as `_private/ionic`, `DisplayObjects`, `dist`, or build outputs.",
       "- Reply to the user in their language. Keep progress updates short and factual, and never expose hidden reasoning.",
       "- When you change a project, validate the result with the available Convertigo tools before claiming completion.",
+      isNoCode ? "- Keep the user-facing vocabulary no-code oriented: forms, applications, pages, fields, data sources, roles, publication, and permissions." : "",
       "",
       "The synchronized Convertigo MCP knowledge pack is available in `skills/convertigo-mcp/`.",
       "Start with `skills/convertigo-mcp/AGENT.md` and `skills/convertigo-mcp/TOOLS.md`, then read only the prompt or resource files relevant to the task.",
+      isNoCode ? "The managed NoCode skill is available in `skills/convertigo-nocode/SKILL.md` and should be preferred for this surface." : "",
       "",
       "Provider: " + providerLabel(provider)
-    ].join("\n");
+    ].filter(function(line) { return line !== ""; }).join("\n");
   }
 
   function defaultCodexHomePath() {
@@ -710,12 +731,43 @@
     ]).join("\n");
   }
 
+  function buildConvertigoNoCodeSkill(mcpEndpoint) {
+    return [
+      "---",
+      "name: convertigo-nocode",
+      "description: Work with Convertigo No-Code Studio / C8Oforms through Convertigo MCP. Use for forms, no-code apps, pages, fields, data sources, roles, publication, and C8Oforms administration.",
+      "---",
+      "",
+      "# Convertigo NoCode",
+      "",
+      "Use this skill when the Assistant is embedded in C8Oforms or any Convertigo No-Code Studio surface.",
+      "",
+      "## Mandatory workflow",
+      "",
+      "1. Call `resources/list` and `prompts/list` when available.",
+      "2. Read `convertigo://capabilities`, `convertigo://recipes/quickstart`, and `convertigo://resources/convertigo-start` before changing anything.",
+      "3. Treat the selected no-code context as the source of truth. In C8Oforms, target the `C8Oforms` project unless the user explicitly names another no-code project.",
+      "4. Use Convertigo MCP tools to inspect, edit, save, reload, and validate. Do not edit generated folders such as `_private/ionic`, `DisplayObjects`, `dist`, or build outputs.",
+      "5. Keep explanations no-code oriented: applications, forms, pages, fields, data sources, roles, permissions, publication, and user-facing behavior.",
+      "6. Reply to the user in their language. Keep progress updates short, factual, and user-safe.",
+      "",
+      "## Convertigo MCP entry",
+      "",
+      "- Expected MCP endpoint: `" + trim(mcpEndpoint) + "`",
+      "- Prefer MCP tools over filesystem edits for Convertigo objects.",
+      "- Use the synchronized MCP knowledge pack in `skills/convertigo-mcp/` only for additional tool/resource details."
+    ].join("\n");
+  }
+
   function setupCodexGeneralist(options, homePath, mcpEndpoint) {
+    var profile = normalizeSkillProfile(options);
+    var skillSlug = managedSkillSlug(profile);
+    var skillLabel = managedSkillLabel(profile);
     var report = {
       attempted: false,
       ok: true,
       provider: "codex",
-      source: "ConvertigoMCP._setupCodex-compatible",
+      source: skillLabel + " setup",
       target: "",
       skillStatus: "skipped",
       configStatus: "skipped",
@@ -726,7 +778,7 @@
       nextSteps: [
         "Restart Codex to pick up the updated skill list.",
         "Start a fresh Codex session in the Convertigo workspace.",
-        "Use the generated convertigo-generalist skill for general Convertigo work."
+        "Use the generated " + skillSlug + " skill for this Convertigo surface."
       ],
       dryRun: boolValue(options.dryRun, false),
       skipped: false,
@@ -738,15 +790,16 @@
     };
     if (boolValue(options.skipSkillsInstall || options.skipSkillSync, false)) {
       report.skipped = true;
-      report.message = "Convertigo Generalist setup disabled by request";
+      report.message = skillLabel + " setup disabled by request";
       return report;
     }
     report.attempted = true;
     try {
       var codexHome = new File(effectiveCodexHomePath(homePath));
-      var skillFile = new File(new File(new File(codexHome, "skills"), "convertigo-generalist"), "SKILL.md");
+      var skillFile = new File(new File(new File(codexHome, "skills"), skillSlug), "SKILL.md");
       var configFile = new File(codexHome, "config.toml");
-      var skillWrite = writeManagedTextFile(skillFile, buildConvertigoGeneralistSkill(report.resolvedMcpUrl), report.dryRun);
+      var skillContent = profile === "nocode" ? buildConvertigoNoCodeSkill(report.resolvedMcpUrl) : buildConvertigoGeneralistSkill(report.resolvedMcpUrl);
+      var skillWrite = writeManagedTextFile(skillFile, skillContent, report.dryRun);
       var existingConfig = readTextFile(configFile);
       var patchedConfig = patchCodexMcpConfigText(existingConfig, report.resolvedMcpUrl);
       if (patchedConfig.status !== "unchanged" && report.dryRun !== true) {
@@ -758,28 +811,30 @@
       report.target = report.resolvedCodexHome;
       report.skillPath = filePath(skillFile);
       if (skillWrite.status === "unchanged") {
-        report.reused.push("skills/convertigo-generalist/SKILL.md");
+        report.reused.push("skills/" + skillSlug + "/SKILL.md");
       } else {
-        report.generated.push("skills/convertigo-generalist/SKILL.md");
+        report.generated.push("skills/" + skillSlug + "/SKILL.md");
       }
       if (patchedConfig.status === "unchanged") {
         report.reused.push("config.toml");
       } else {
         report.generated.push("config.toml");
       }
-      report.message = "Convertigo Generalist skill configured";
+      report.message = skillLabel + " skill configured";
     } catch (e) {
       report.ok = false;
       report.error = String(e);
-      report.message = "Unable to configure Convertigo Generalist skill";
+      report.message = "Unable to configure " + skillLabel + " skill";
     }
     return report;
   }
 
   function installAgentSkills(options, provider, homePath) {
+    options = options || {};
     if (normalizeProvider(provider) === "codex") {
-      return setupCodexGeneralist(options || {}, homePath, resolveMcpEndpoint(options || {}));
+      return setupCodexGeneralist(options, homePath, resolveMcpEndpoint(options));
     }
+    var profile = normalizeSkillProfile(options);
     var report = {
       attempted: false,
       ok: true,
@@ -788,6 +843,7 @@
       target: "",
       copied: [],
       generated: [],
+      reused: [],
       skipped: false,
       message: "",
       error: ""
@@ -822,9 +878,18 @@
       copySkillTree(source, target, "TOOLS.md", report);
       copySkillTree(source, target, "prompts", report);
       copySkillTree(source, target, "resources", report);
-      writeTextFile(new File(homeDir, "AGENTS.md"), agentSkillInstructions(provider));
+      if (profile === "nocode") {
+        var noCodeSkillFile = new File(new File(new File(homeDir, "skills"), "convertigo-nocode"), "SKILL.md");
+        var noCodeWrite = writeManagedTextFile(noCodeSkillFile, buildConvertigoNoCodeSkill(resolveMcpEndpoint(options)), false);
+        if (noCodeWrite.status === "unchanged") {
+          report.reused.push("skills/convertigo-nocode/SKILL.md");
+        } else {
+          report.generated.push("skills/convertigo-nocode/SKILL.md");
+        }
+      }
+      writeTextFile(new File(homeDir, "AGENTS.md"), agentSkillInstructions(provider, profile));
       report.generated.push("AGENTS.md");
-      report.message = "Convertigo MCP skills synchronized";
+      report.message = profile === "nocode" ? "Convertigo NoCode skills synchronized" : "Convertigo MCP skills synchronized";
     } catch (e) {
       report.ok = false;
       report.error = String(e);

@@ -181,13 +181,15 @@
     return text;
   }
 
-  function isCodexGeneralistSkillRead(value) {
+  function isCodexManagedSkillRead(value) {
     var text = trim(String(value || "")).replace(/\s+/g, " ");
     if (!text.length) {
       return false;
     }
     var lower = text.toLowerCase();
-    return lower.indexOf("skills/convertigo-generalist/skill.md") !== -1 &&
+    var readsManagedSkill = lower.indexOf("skills/convertigo-generalist/skill.md") !== -1 ||
+      lower.indexOf("skills/convertigo-nocode/skill.md") !== -1;
+    return readsManagedSkill &&
       (lower.indexOf("sed -n") !== -1 ||
         lower.indexOf("cat ") !== -1 ||
         lower.indexOf("/bin/zsh -lc") !== -1 ||
@@ -196,7 +198,7 @@
         lower.indexOf("bash -lc") !== -1);
   }
 
-  function isCodexGeneralistSkillReadItem(item) {
+  function isCodexManagedSkillReadItem(item) {
     if (!item) {
       return false;
     }
@@ -210,7 +212,7 @@
       codexToolPreview(item.result)
     ];
     for (var i = 0; i < parts.length; i++) {
-      if (isCodexGeneralistSkillRead(parts[i])) {
+      if (isCodexManagedSkillRead(parts[i])) {
         return true;
       }
     }
@@ -411,7 +413,7 @@
         return;
       }
       if (isCodexToolItem(itemType)) {
-        if (isCodexGeneralistSkillReadItem(item)) {
+        if (isCodexManagedSkillReadItem(item)) {
           return;
         }
         pushEvent(entry, type === "item.started" ? "tool/start" : "tool/update", {
