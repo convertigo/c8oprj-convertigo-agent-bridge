@@ -1284,7 +1284,6 @@
         };
       }
       var userBase = childPath(childPath(root, "users"), stableId("user", user));
-      userBase = appendProjectPath(userBase, project);
       return {
         scope: "user",
         path: childPath(userBase, ".vibe-home"),
@@ -1300,11 +1299,9 @@
     var convBase;
     if (user.length) {
       convBase = childPath(childPath(root, "users"), stableId("user", user));
-      convBase = appendProjectPath(convBase, project);
       convBase = childPath(childPath(convBase, "conversations"), stableId("conversation", conv));
     } else {
       convBase = childPath(childPath(root, "conversations"), stableId("conversation", conv));
-      convBase = appendProjectPath(convBase, project);
     }
     return {
       scope: "conversation",
@@ -1387,11 +1384,9 @@
     var convBase;
     if (user.length) {
       convBase = childPath(childPath(root, "users"), stableId("user", user));
-      convBase = appendProjectPath(convBase, project);
       convBase = childPath(childPath(convBase, "conversations"), stableId("conversation", conv));
     } else {
       convBase = childPath(childPath(root, "conversations"), stableId("conversation", conv));
-      convBase = appendProjectPath(convBase, project);
     }
     return {
       scope: "conversation",

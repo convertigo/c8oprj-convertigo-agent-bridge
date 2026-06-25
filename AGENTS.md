@@ -71,6 +71,13 @@ same context.
 - Vibe conversations and homes are managed under `<workspaceRoot>/agents/vibe`.
 - In NoCode/C8Oforms contexts, Vibe should resolve home scope by user, not by
   conversation, unless the caller explicitly overrides the scope.
+- Do not add project names into the filesystem path for Codex/Vibe homes.
+  Projects belong in conversation metadata (`projectNames`, `primaryProject`)
+  so one conversation can cover no project, a scratch flow, or several impacted
+  projects without changing homes.
+- The Assistant startup path should not auto-resume the latest conversation.
+  It should list conversations and capabilities; a conversation becomes active
+  only when the user resumes it explicitly or sends the first prompt.
 - Python/Vibe setup is separate from Codex setup. Keep the shared helper logic in
   `agent_bridge_common.js` and provider-specific behavior in the provider files.
 
