@@ -868,6 +868,10 @@
       userId: options.userId,
       conversationId: options.conversationId,
       projectId: options.projectId,
+      agentProfile: options.agentProfile,
+      skillProfile: options.skillProfile,
+      assistantContext: options.assistantContext,
+      assistantSurface: options.assistantSurface,
       mcpEndpoint: options.mcpEndpoint,
       codexPath: options.codexPath || options.commandPath,
       install: options.install || options.installCodex,
@@ -881,7 +885,10 @@
       codexInstallTimeoutMs: options.codexInstallTimeoutMs,
       forceCodexInstall: options.forceCodexInstall || options.forceInstall,
       mcpSkillsSourceDir: options.mcpSkillsSourceDir || options.skillsSourceDir || options.convertigoMcpDir,
-      skipSkillsInstall: options.skipSkillsInstall || options.skipSkillSync
+      skipSkillsInstall: options.skipSkillsInstall || options.skipSkillSync,
+      nocodeMcpTokenHandle: options.nocodeMcpTokenHandle || options.noCodeMcpTokenHandle || options.mcpBearerTokenHandle,
+      noCodeMcpTokenHandle: options.noCodeMcpTokenHandle,
+      mcpBearerTokenHandle: options.mcpBearerTokenHandle
     });
     if (!setup.ok) {
       return {
@@ -911,6 +918,10 @@
     var env = parseObject(options.env, {});
     if (setup.setup.codexHome.length) {
       env.CODEX_HOME = setup.setup.codexHome;
+    }
+    var noCodeToken = noCodeMcpBearerToken(options);
+    if (noCodeToken.length) {
+      env[NOCODE_MCP_TOKEN_ENV] = noCodeToken;
     }
     var nodePath = nodeRuntimeSearchPath(options);
     if (nodePath.length) {

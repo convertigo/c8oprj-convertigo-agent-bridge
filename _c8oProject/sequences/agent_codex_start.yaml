@@ -13,6 +13,10 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
       userId: typeof userId === "undefined" ? "" : userId,
       conversationId: typeof conversationId === "undefined" ? "" : conversationId,
       projectId: typeof projectId === "undefined" ? "" : projectId,
+      agentProfile: typeof agentProfile === "undefined" ? "" : agentProfile,
+      skillProfile: typeof skillProfile === "undefined" ? "" : skillProfile,
+      assistantContext: typeof assistantContext === "undefined" ? "" : assistantContext,
+      assistantSurface: typeof assistantSurface === "undefined" ? "" : assistantSurface,
       env: typeof env === "undefined" ? "" : env,
       ttlSeconds: typeof ttlSeconds === "undefined" ? "" : ttlSeconds,
       codexPath: typeof codexPath === "undefined" ? "" : codexPath,
@@ -29,7 +33,15 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
       codexVersion: typeof codexVersion === "undefined" ? "" : codexVersion,
       codexInstallMethod: typeof codexInstallMethod === "undefined" ? "" : codexInstallMethod,
       codexInstallTimeoutMs: typeof codexInstallTimeoutMs === "undefined" ? "" : codexInstallTimeoutMs,
-      forceCodexInstall: typeof forceCodexInstall === "undefined" ? "" : forceCodexInstall
+      forceCodexInstall: typeof forceCodexInstall === "undefined" ? "" : forceCodexInstall,
+      mcpSkillsSourceDir: typeof mcpSkillsSourceDir === "undefined" ? "" : mcpSkillsSourceDir,
+      skipSkillsInstall: typeof skipSkillsInstall === "undefined" ? "" : skipSkillsInstall,
+      nocodeMcpToken: typeof nocodeMcpToken === "undefined" ? "" : nocodeMcpToken,
+      noCodeMcpToken: typeof noCodeMcpToken === "undefined" ? "" : noCodeMcpToken,
+      mcpBearerToken: typeof mcpBearerToken === "undefined" ? "" : mcpBearerToken,
+      nocodeMcpTokenHandle: typeof nocodeMcpTokenHandle === "undefined" ? "" : nocodeMcpTokenHandle,
+      noCodeMcpTokenHandle: typeof noCodeMcpTokenHandle === "undefined" ? "" : noCodeMcpTokenHandle,
+      mcpBearerTokenHandle: typeof mcpBearerTokenHandle === "undefined" ? "" : mcpBearerTokenHandle
     });'
 ↓result [steps.JsonToXmlStep-1781693000202]: 
   jsonObject: 
@@ -128,3 +140,40 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
 ↓serviceTier [variables.RequestableVariable-1782119617526]: 
   comment: Optional Codex service tier override, such as priority.
   description: Optional Codex service tier override, such as priority.
+↓agentProfile [variables.RequestableVariable-1782509099712]: 
+  comment: Agent profile used to select the managed skill pack, for example nocode or generalist.
+  description: Agent profile used to select the managed skill pack, for example nocode or generalist.
+↓skillProfile [variables.RequestableVariable-1782509099737]: 
+  comment: Skill profile used to select the managed skill pack, for example nocode or generalist.
+  description: Skill profile used to select the managed skill pack, for example nocode or generalist.
+↓assistantContext [variables.RequestableVariable-1782509099764]: 
+  comment: Assistant context supplied by the embedding surface, for example nocode.
+  description: Assistant context supplied by the embedding surface, for example nocode.
+↓assistantSurface [variables.RequestableVariable-1782509099790]: 
+  comment: Assistant surface supplied by the embedding surface, for example nocode or studio.
+  description: Assistant surface supplied by the embedding surface, for example nocode or studio.
+↓mcpSkillsSourceDir [variables.RequestableVariable-1782509099812]: 
+  comment: Optional ConvertigoMCP project directory used to synchronize base agent skills.
+  description: Optional ConvertigoMCP project directory used to synchronize base agent skills.
+↓skipSkillsInstall [variables.RequestableVariable-1782509099832]: 
+  comment: When true, skips synchronization of the ConvertigoMCP skill pack into the agent home.
+  description: When true, skips synchronization of the ConvertigoMCP skill pack into the agent home.
+  schemaType: xsd:boolean
+↓nocodeMcpToken [variables.RequestableVariable-1782509099857]: 
+  comment: Optional direct NoCode MCP bearer token. Prefer nocodeMcpTokenHandle when available.
+  description: Optional direct NoCode MCP bearer token. Prefer nocodeMcpTokenHandle when available.
+↓noCodeMcpToken [variables.RequestableVariable-1782509099882]: 
+  comment: Optional direct NoCode MCP bearer token alias. Prefer noCodeMcpTokenHandle when available.
+  description: Optional direct NoCode MCP bearer token alias. Prefer noCodeMcpTokenHandle when available.
+↓mcpBearerToken [variables.RequestableVariable-1782509099905]: 
+  comment: Optional direct MCP bearer token. Prefer mcpBearerTokenHandle when available.
+  description: Optional direct MCP bearer token. Prefer mcpBearerTokenHandle when available.
+↓nocodeMcpTokenHandle [variables.RequestableVariable-1782509099936]: 
+  comment: Server-side handle containing the NoCode MCP bearer token.
+  description: Server-side handle containing the NoCode MCP bearer token.
+↓noCodeMcpTokenHandle [variables.RequestableVariable-1782509099960]: 
+  comment: Server-side handle containing the NoCode MCP bearer token alias.
+  description: Server-side handle containing the NoCode MCP bearer token alias.
+↓mcpBearerTokenHandle [variables.RequestableVariable-1782509099981]: 
+  comment: Server-side handle containing the MCP bearer token.
+  description: Server-side handle containing the MCP bearer token.

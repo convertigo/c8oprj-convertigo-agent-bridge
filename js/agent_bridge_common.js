@@ -8,6 +8,7 @@
   var DEFAULT_EVENT_LIMIT = 100;
   var MAX_EVENT_LIMIT = 500;
   var MAX_EVENT_BUFFER = 5000;
+  var NOCODE_MCP_TOKEN_ENV = "C8O_NOCODE_MCP_TOKEN";
 
   var File = Packages.java.io.File;
   var FileOutputStream = Packages.java.io.FileOutputStream;
@@ -47,6 +48,54 @@
       return "";
     }
     return String(value).replace(/^\s+|\s+$/g, "");
+  }
+
+  function requestParameter(name) {
+    try {
+      var request = context && context.httpServletRequest ? context.httpServletRequest : null;
+      if (request !== null) {
+        return trim(request.getParameter(String(name)));
+      }
+    } catch (_ignoreRequestParameter) {}
+    return "";
+  }
+
+  function optionOrRequest(options, name) {
+    options = options || {};
+    var value = trim(options[name]);
+    if (value.length) {
+      return value;
+    }
+    return requestParameter(name);
+  }
+
+  function optionsWithRequestFallbacks(options) {
+    options = options || {};
+    var copy = {};
+    for (var key in options) {
+      if (Object.prototype.hasOwnProperty.call(options, key)) {
+        copy[key] = options[key];
+      }
+    }
+    [
+      "provider", "agent", "agentProvider", "targetProject", "projectName", "projectId", "primaryProject",
+      "userId", "agentProfile", "skillProfile", "assistantContext", "assistantSurface", "profile",
+      "currentUrl", "currentRoute", "currentPath", "currentFormId", "currentFormUrl",
+      "nocodeCurrentUrl", "nocodeCurrentRoute", "nocodeCurrentFormId", "nocodeCurrentFormUrl",
+      "formId", "pageId", "applicationId", "currentPage", "currentApplicationId",
+      "codexHomeScope", "vibeHomeScope", "homeScope", "codexHome", "vibeHome", "agentHome",
+      "mcpEndpoint", "workspaceRoot", "settingsTimeoutMs", "modelsTimeoutMs",
+      "nocodeMcpToken", "noCodeMcpToken", "mcpBearerToken",
+      "nocodeMcpTokenHandle", "noCodeMcpTokenHandle", "mcpBearerTokenHandle"
+    ].forEach(function (name) {
+      if (!trim(copy[name]).length) {
+        var value = requestParameter(name);
+        if (value.length) {
+          copy[name] = value;
+        }
+      }
+    });
+    return copy;
   }
 
   function boolValue(value, defaultValue) {
@@ -481,10 +530,72 @@
     }
   }
 
+  function noCodeSkillSourceFile(options) {
+    options = options || {};
+    var candidates = [];
+    var explicit = trim(options.mcpSkillsSourceDir || options.skillsSourceDir || options.convertigoMcpDir);
+    if (explicit.length) {
+      var explicitFile = new File(explicit);
+      candidates.push(new File(explicitFile, "SKILL.md"));
+      candidates.push(new File(new File(explicitFile, "convertigo-nocode"), "SKILL.md"));
+      candidates.push(new File(new File(new File(explicitFile, "resources"), "convertigo-nocode"), "SKILL.md"));
+    }
+    var sourceRoot = mcpSkillSourceCandidate(options);
+    if (sourceRoot !== null) {
+      candidates.push(new File(new File(new File(sourceRoot, "resources"), "convertigo-nocode"), "SKILL.md"));
+    }
+    var home = String(System.getProperty("user.home"));
+    candidates.push(new File(home, "git/c8oprj-c8o-mcp/resources/convertigo-nocode/SKILL.md"));
+    candidates.push(new File(home, "git/c8oprj-convertigo-mcp/resources/convertigo-nocode/SKILL.md"));
+    for (var i = 0; i < candidates.length; i++) {
+      var file = candidates[i];
+      if (file !== null && file.isFile()) {
+        return file;
+      }
+    }
+    return null;
+  }
+
+  function managedSkillContent(options, profile, mcpEndpoint) {
+    var normalizedProfile = normalizeSkillProfile({ agentProfile: profile });
+    if (normalizedProfile === "nocode") {
+      var noCodeFile = noCodeSkillSourceFile(options);
+      if (noCodeFile !== null) {
+        return {
+          content: readTextFile(noCodeFile),
+          source: filePath(noCodeFile),
+          copied: true
+        };
+      }
+      return {
+        content: buildConvertigoNoCodeSkill(mcpEndpoint),
+        source: "generated fallback",
+        copied: false
+      };
+    }
+    return {
+      content: buildConvertigoGeneralistSkill(mcpEndpoint),
+      source: "generated",
+      copied: false
+    };
+  }
+
   function normalizeSkillProfile(options) {
     options = options || {};
-    var value = trim(options.agentProfile || options.skillProfile || options.assistantContext || options.assistantSurface || options.profile).toLowerCase();
-    var project = trim(options.targetProject || options.projectName || options.projectId || options.primaryProject || resolveProjectIdOption(options)).toLowerCase();
+    var value = trim(
+      optionOrRequest(options, "agentProfile") ||
+      optionOrRequest(options, "skillProfile") ||
+      optionOrRequest(options, "assistantContext") ||
+      optionOrRequest(options, "assistantSurface") ||
+      optionOrRequest(options, "profile")
+    ).toLowerCase();
+    var project = trim(
+      optionOrRequest(options, "targetProject") ||
+      optionOrRequest(options, "projectName") ||
+      optionOrRequest(options, "projectId") ||
+      optionOrRequest(options, "primaryProject") ||
+      resolveProjectIdOption(options)
+    ).toLowerCase();
     if (value === "nocode" || value === "no-code" || value === "c8oforms" || value === "forms" || project === "c8oforms") {
       return "nocode";
     }
@@ -508,7 +619,11 @@
       "",
       isNoCode ? "- Automatically follow the Convertigo NoCode workflow for C8Oforms / No-Code Studio work." : "- Automatically follow the Convertigo Generalist workflow for Convertigo project work.",
       "- Use the Convertigo MCP/tools whenever you need to inspect, modify, save, reload, or validate Convertigo projects.",
-      isNoCode ? "- Work in the C8Oforms no-code project context unless the user explicitly asks for another supported no-code context." : "- Work on the selected project unless the user explicitly asks for another project.",
+      isNoCode ? "- You are in the C8Oforms / No-Code Studio surface, not in Eclipse Studio. A selected Convertigo project is optional in this surface." : "- Work on the selected project unless the user explicitly asks for another project.",
+      isNoCode ? "- Discover forms, applications, pages, data sources, roles, publication state, and permissions through the NoCode/C8Oforms MCP context before falling back to generic Studio project inspection." : "",
+      isNoCode ? "- If the current NoCode URL, form id, route, or page id is supplied in the prompt, treat it as the default target for edits unless the user names another target." : "",
+      isNoCode ? "- If a first tool discovery attempt does not show `nocode-form-*` tools, retry with exact searches for `Convertigo NoCode form contract get edit update validate compile C8Oforms`, `nocode-form-contract-get nocode-form-edit nocode-form-update`, and `mcp__convertigo nocode_form_contract_get nocode_form_edit nocode_form_update` before reporting a blocker." : "",
+      isNoCode ? "- If no no-code form/application is selected, answer from the C8Oforms workspace or ask which form/application to target; do not assume an unrelated Studio project." : "",
       "- Prefer Convertigo objects and MCP operations. Do not edit generated folders such as `_private/ionic`, `DisplayObjects`, `dist`, or build outputs.",
       "- Reply to the user in their language. Keep progress updates short and factual, and never expose hidden reasoning.",
       "- When you change a project, validate the result with the available Convertigo tools before claiming completion.",
@@ -563,12 +678,42 @@
     return { found: true, start: start, end: end };
   }
 
-  function patchCodexMcpConfigText(existingText, mcpEndpoint) {
+  function serverSecretGet(handle) {
+    var text = trim(handle);
+    if (!text.length) {
+      return "";
+    }
+    try {
+      var store = getServerStore();
+      if (store !== null && store.get) {
+        var value = store.get(text);
+        return value === null || typeof value === "undefined" ? "" : trim(value);
+      }
+    } catch (_ignoreServerSecretGet) {}
+    return "";
+  }
+
+  function noCodeMcpBearerToken(options) {
+    options = options || {};
+    if (normalizeSkillProfile(options) !== "nocode") {
+      return "";
+    }
+    var direct = trim(options.nocodeMcpToken || options.noCodeMcpToken || options.mcpBearerToken);
+    if (direct.length) {
+      return direct;
+    }
+    return serverSecretGet(options.nocodeMcpTokenHandle || options.noCodeMcpTokenHandle || options.mcpBearerTokenHandle);
+  }
+
+  function patchCodexMcpConfigText(existingText, mcpEndpoint, options) {
     var text = String(existingText == null ? "" : existingText).replace(/\r\n?/g, "\n");
-    var lines = splitTextLines(text);
+    var lines = trim(text).length ? splitTextLines(text) : [];
     var range = findTomlSectionRange(lines, "mcp_servers.convertigo");
     var urlLine = 'url = "' + tomlEscape(mcpEndpoint) + '"';
     var timeoutLine = "startup_timeout_sec = 60";
+    var enabledLine = "enabled = true";
+    var useBearer = normalizeSkillProfile(options || {}) === "nocode";
+    var bearerLine = 'bearer_token_env_var = "' + tomlEscape(NOCODE_MCP_TOKEN_ENV) + '"';
     var status = "unchanged";
 
     if (!range.found) {
@@ -578,6 +723,10 @@
       lines.push("[mcp_servers.convertigo]");
       lines.push(urlLine);
       lines.push(timeoutLine);
+      lines.push(enabledLine);
+      if (useBearer) {
+        lines.push(bearerLine);
+      }
       status = text.length ? "updated" : "created";
       return {
         status: status,
@@ -588,6 +737,8 @@
     var sectionLines = lines.slice(range.start, range.end);
     var replacedUrl = false;
     var replacedTimeout = false;
+    var replacedEnabled = false;
+    var replacedBearer = false;
     for (var i = 1; i < sectionLines.length; i++) {
       if (/^\s*url\s*=/.test(sectionLines[i])) {
         if (trim(sectionLines[i]) !== urlLine) {
@@ -603,6 +754,28 @@
           status = "updated";
         }
         replacedTimeout = true;
+        continue;
+      }
+      if (/^\s*enabled\s*=/.test(sectionLines[i])) {
+        if (trim(sectionLines[i]) !== enabledLine) {
+          sectionLines[i] = enabledLine;
+          status = "updated";
+        }
+        replacedEnabled = true;
+        continue;
+      }
+      if (/^\s*bearer_token_env_var\s*=/.test(sectionLines[i])) {
+        if (useBearer) {
+          if (trim(sectionLines[i]) !== bearerLine) {
+            sectionLines[i] = bearerLine;
+            status = "updated";
+          }
+          replacedBearer = true;
+        } else {
+          sectionLines.splice(i, 1);
+          i -= 1;
+          status = "updated";
+        }
       }
     }
     if (!replacedUrl) {
@@ -611,6 +784,28 @@
     }
     if (!replacedTimeout) {
       sectionLines.splice(replacedUrl ? 2 : 2, 0, timeoutLine);
+      status = "updated";
+    }
+    if (!replacedEnabled) {
+      var enabledIndex = sectionLines.length;
+      for (var e = 1; e < sectionLines.length; e++) {
+        if (/^\s*startup_timeout_sec\s*=/.test(sectionLines[e])) {
+          enabledIndex = e + 1;
+          break;
+        }
+      }
+      sectionLines.splice(enabledIndex, 0, enabledLine);
+      status = "updated";
+    }
+    if (useBearer && !replacedBearer) {
+      var bearerIndex = sectionLines.length;
+      for (var k = 1; k < sectionLines.length; k++) {
+        if (/^\s*startup_timeout_sec\s*=/.test(sectionLines[k])) {
+          bearerIndex = k + 1;
+          break;
+        }
+      }
+      sectionLines.splice(bearerIndex, 0, bearerLine);
       status = "updated";
     }
     var nextText = lines.slice(0, range.start).concat(sectionLines).concat(lines.slice(range.end)).join("\n").replace(/\n+$/, "\n");
@@ -755,7 +950,14 @@
       "",
       "- Expected MCP endpoint: `" + trim(mcpEndpoint) + "`",
       "- Prefer MCP tools over filesystem edits for Convertigo objects.",
-      "- Use the synchronized MCP knowledge pack in `skills/convertigo-mcp/` only for additional tool/resource details."
+      "- Use the synchronized MCP knowledge pack in `skills/convertigo-mcp/` only for additional tool/resource details.",
+      "",
+      "## Tool discovery fallback",
+      "",
+      "- The NoCode tools can appear as `nocode-form-contract-get`, `nocode-form-edit`, `nocode-form-update`, `nocode-form-validate`, and `nocode-form-compile`.",
+      "- Some providers expose tool names with underscores, such as `nocode_form_contract_get` or `mcp__convertigo.nocode_form_update`; treat these as the same NoCode tools.",
+      "- If `tool_search` returns no NoCode tools on the first try, retry with exact queries for `Convertigo NoCode form contract get edit update validate compile C8Oforms` and `nocode-form-contract-get nocode-form-edit nocode-form-update` before declaring the tools unavailable.",
+      "- If a current NoCode form id or URL is provided by the host application, use it as the default target for form edits unless the user explicitly names another form."
     ].join("\n");
   }
 
@@ -798,10 +1000,10 @@
       var codexHome = new File(effectiveCodexHomePath(homePath));
       var skillFile = new File(new File(new File(codexHome, "skills"), skillSlug), "SKILL.md");
       var configFile = new File(codexHome, "config.toml");
-      var skillContent = profile === "nocode" ? buildConvertigoNoCodeSkill(report.resolvedMcpUrl) : buildConvertigoGeneralistSkill(report.resolvedMcpUrl);
-      var skillWrite = writeManagedTextFile(skillFile, skillContent, report.dryRun);
+      var skillSource = managedSkillContent(options, profile, report.resolvedMcpUrl);
+      var skillWrite = writeManagedTextFile(skillFile, skillSource.content, report.dryRun);
       var existingConfig = readTextFile(configFile);
-      var patchedConfig = patchCodexMcpConfigText(existingConfig, report.resolvedMcpUrl);
+      var patchedConfig = patchCodexMcpConfigText(existingConfig, report.resolvedMcpUrl, options);
       if (patchedConfig.status !== "unchanged" && report.dryRun !== true) {
         writeTextFile(configFile, patchedConfig.text);
       }
@@ -810,8 +1012,11 @@
       report.resolvedCodexHome = filePath(codexHome);
       report.target = report.resolvedCodexHome;
       report.skillPath = filePath(skillFile);
+      report.source = skillSource.source || report.source;
       if (skillWrite.status === "unchanged") {
         report.reused.push("skills/" + skillSlug + "/SKILL.md");
+      } else if (skillSource.copied === true) {
+        report.copied.push("skills/" + skillSlug + "/SKILL.md");
       } else {
         report.generated.push("skills/" + skillSlug + "/SKILL.md");
       }
@@ -880,9 +1085,12 @@
       copySkillTree(source, target, "resources", report);
       if (profile === "nocode") {
         var noCodeSkillFile = new File(new File(new File(homeDir, "skills"), "convertigo-nocode"), "SKILL.md");
-        var noCodeWrite = writeManagedTextFile(noCodeSkillFile, buildConvertigoNoCodeSkill(resolveMcpEndpoint(options)), false);
+        var noCodeSkill = managedSkillContent(options, profile, resolveMcpEndpoint(options));
+        var noCodeWrite = writeManagedTextFile(noCodeSkillFile, noCodeSkill.content, false);
         if (noCodeWrite.status === "unchanged") {
           report.reused.push("skills/convertigo-nocode/SKILL.md");
+        } else if (noCodeSkill.copied === true) {
+          report.copied.push("skills/convertigo-nocode/SKILL.md");
         } else {
           report.generated.push("skills/convertigo-nocode/SKILL.md");
         }
@@ -898,37 +1106,21 @@
     return report;
   }
 
-  function appendCodexConvertigoMcpConfig(configFile, mcpEndpoint) {
+  function appendCodexConvertigoMcpConfig(configFile, mcpEndpoint, options) {
     var endpoint = trim(mcpEndpoint) || resolveMcpEndpoint({});
-    var marker = "[mcp_servers.convertigo]";
     var text = configFile.exists() ? readTextFile(configFile) : "";
     if (!text.length) {
       text = [
         "# Generated by ConvertigoAgentBridge.",
         'preferred_auth_method = "chat"',
-        "",
-        marker,
-        'url = "' + endpoint.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"',
-        "startup_timeout_sec = 60",
-        "enabled = true",
         ""
       ].join("\n");
-      writeTextFile(configFile, text);
-      return true;
     }
-    if (text.indexOf(marker) >= 0) {
+    var patched = patchCodexMcpConfigText(text, endpoint, options || {});
+    if (patched.status === "unchanged") {
       return false;
     }
-    text += (text.lastIndexOf("\n") === text.length - 1 ? "" : "\n") + [
-      "",
-      "# Added by ConvertigoAgentBridge.",
-      marker,
-      'url = "' + endpoint.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"',
-      "startup_timeout_sec = 60",
-      "enabled = true",
-      ""
-    ].join("\n");
-    writeTextFile(configFile, text);
+    writeTextFile(configFile, patched.text);
     return true;
   }
 
@@ -971,7 +1163,7 @@
       copyCodexUserFileIfMissing(userCodex, homeDir, "auth.json.api", report);
       copyCodexUserFileIfMissing(userCodex, homeDir, "installation_id", report);
       var configFile = new File(homeDir, "config.toml");
-      if (appendCodexConvertigoMcpConfig(configFile, mcpEndpoint)) {
+      if (appendCodexConvertigoMcpConfig(configFile, mcpEndpoint, options)) {
         report.generated.push("config.toml");
       } else {
         report.reused.push("config.toml");
@@ -1168,6 +1360,43 @@
     return String(prefix) + "-" + String(uuid);
   }
 
+  function hashShort(value) {
+    var md = MessageDigest.getInstance("SHA-256");
+    var bytes = md.digest(new java.lang.String(String(value || "")).getBytes(StandardCharsets.UTF_8));
+    var out = "";
+    for (var i = 0; i < bytes.length; i++) {
+      var n = Number(bytes[i]);
+      if (n < 0) {
+        n += 256;
+      }
+      if (n < 16) {
+        out += "0";
+      }
+      out += n.toString(16);
+    }
+    return out.substring(0, 16);
+  }
+
+  function safePathPart(value) {
+    var text = String(value || "").replace(/[^A-Za-z0-9_.-]/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "");
+    return text.length ? text : "_";
+  }
+
+  function userPathSlug(value) {
+    var text = trim(value);
+    if (!text.length || text.toLowerCase() === "studio") {
+      return "studio";
+    }
+    var readable = safePathPart(text.toLowerCase());
+    if (!readable.length || readable === "_") {
+      readable = "user";
+    }
+    if (readable.length > 80) {
+      readable = readable.substring(0, 80).replace(/[_.-]+$/g, "");
+    }
+    return readable + "--" + hashShort(text);
+  }
+
   function getSessionAttribute(name) {
     try {
       if (context && context.httpSession) {
@@ -1283,7 +1512,7 @@
           error: "userId is required for user scoped VIBE_HOME"
         };
       }
-      var userBase = childPath(childPath(root, "users"), stableId("user", user));
+      var userBase = childPath(childPath(root, "users"), userPathSlug(user));
       return {
         scope: "user",
         path: childPath(userBase, ".vibe-home"),
@@ -1298,7 +1527,7 @@
     var conv = resolveConversationIdOption(options);
     var convBase;
     if (user.length) {
-      convBase = childPath(childPath(root, "users"), stableId("user", user));
+      convBase = childPath(childPath(root, "users"), userPathSlug(user));
       convBase = childPath(childPath(convBase, "conversations"), stableId("conversation", conv));
     } else {
       convBase = childPath(childPath(root, "conversations"), stableId("conversation", conv));
@@ -1368,7 +1597,7 @@
           error: "userId is required for user scoped CODEX_HOME"
         };
       }
-      var userBase = childPath(childPath(root, "users"), stableId("user", user));
+      var userBase = childPath(childPath(root, "users"), userPathSlug(user));
       return {
         scope: "user",
         path: childPath(userBase, "codex-home"),
@@ -1383,7 +1612,7 @@
     var conv = resolveConversationIdOption(options);
     var convBase;
     if (user.length) {
-      convBase = childPath(childPath(root, "users"), stableId("user", user));
+      convBase = childPath(childPath(root, "users"), userPathSlug(user));
       convBase = childPath(childPath(convBase, "conversations"), stableId("conversation", conv));
     } else {
       convBase = childPath(childPath(root, "conversations"), stableId("conversation", conv));
@@ -2413,6 +2642,10 @@
     if (trim(codexHomePath).length) {
       env.CODEX_HOME = trim(codexHomePath);
     }
+    var noCodeToken = noCodeMcpBearerToken(options || {});
+    if (noCodeToken.length) {
+      env[NOCODE_MCP_TOKEN_ENV] = noCodeToken;
+    }
     return env;
   }
 
@@ -2582,7 +2815,7 @@
   }
 
   function codexSettings(options) {
-    options = options || {};
+    options = optionsWithRequestFallbacks(options);
     var setup = detectCodexRuntime(options);
     var source = {
       type: "cli",
@@ -2593,7 +2826,16 @@
       stderr: ""
     };
     var models = [];
+    var bootstrap = null;
+    var skills = null;
     if (setup.codex.found) {
+      try {
+        if (trim(setup.codexHome).length) {
+          bootstrap = bootstrapCodexHome(options, setup.codexHome, resolveMcpEndpoint(options));
+          skills = installAgentSkills(options, "codex", setup.codexHome);
+          setup = detectCodexRuntime(options);
+        }
+      } catch (_ignoreCodexHomePrepare) {}
       var probe = runCommandCaptured([setup.codex.path, "debug", "models"], {
         timeoutMs: intValue(options.settingsTimeoutMs || options.modelsTimeoutMs, 60000, 1000, 180000),
         env: codexRuntimeEnv(options, setup.codexHome)
@@ -2615,6 +2857,8 @@
       status: setup.codex.found ? "ready" : "missing",
       ready: setup.codex.found === true,
       setup: compactCodexSetup(setup),
+      bootstrap: bootstrap,
+      skills: skills,
       source: source,
       defaultModel: defaultModel,
       models: models,
@@ -2679,7 +2923,7 @@
   }
 
   function vibeSettings(options) {
-    options = options || {};
+    options = optionsWithRequestFallbacks(options);
     var setup = detectRuntime(options);
     var selectedFile = setup.vibeHome.length ? new File(setup.vibeHome, "config.toml") : null;
     var selected = selectedFile !== null ? parseVibeModelsFromConfig(selectedFile) : { path: "", exists: false, activeModel: "", models: [] };
@@ -2731,7 +2975,7 @@
   }
 
   C8O.agentBridge.settings = function (options) {
-    options = options || {};
+    options = optionsWithRequestFallbacks(options);
     var rawProvider = trim(options.provider || options.agent || "").toLowerCase();
     var provider = (!rawProvider.length || rawProvider === "all" || rawProvider === "*" || rawProvider === "any") ? "" : normalizeProvider(rawProvider);
     var providers = [];

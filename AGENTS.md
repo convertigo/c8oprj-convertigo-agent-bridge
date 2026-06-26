@@ -43,6 +43,12 @@ same context.
   the managed `convertigo-nocode` skill instead of `convertigo-generalist`.
   C8Oforms should also pass the authenticated `userId` and `user` home scope so
   each user gets separate Codex/Vibe homes under the workspace agent runtime.
+- For NoCode Codex sessions, the Assistant creates the C8Oforms MCP token from
+  the authenticated session and passes only an opaque server-memory handle to the
+  bridge. The bridge resolves that handle, sets `C8O_NOCODE_MCP_TOKEN` only in
+  the Codex process environment, and writes `bearer_token_env_var` to
+  `codex-home/config.toml`; never write the raw token to config files, prompts,
+  logs, or conversation records.
 - The MCP endpoint should be derived from the current Convertigo endpoint when
   possible. Local hotfix Studio commonly uses
   `http://localhost:18082/convertigo/api/mcp`; standard Studio/server ports may
