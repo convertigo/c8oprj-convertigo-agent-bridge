@@ -31,9 +31,21 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
       allowNodeDownload: typeof allowNodeDownload === "undefined" ? "" : allowNodeDownload,
       codexPackage: typeof codexPackage === "undefined" ? "" : codexPackage,
       codexVersion: typeof codexVersion === "undefined" ? "" : codexVersion,
+      playwrightMcpPackage: typeof playwrightMcpPackage === "undefined" ? "" : playwrightMcpPackage,
+      playwrightMcpVersion: typeof playwrightMcpVersion === "undefined" ? "" : playwrightMcpVersion,
+      playwrightPackage: typeof playwrightPackage === "undefined" ? "" : playwrightPackage,
+      playwrightVersion: typeof playwrightVersion === "undefined" ? "" : playwrightVersion,
       codexInstallMethod: typeof codexInstallMethod === "undefined" ? "" : codexInstallMethod,
       codexInstallTimeoutMs: typeof codexInstallTimeoutMs === "undefined" ? "" : codexInstallTimeoutMs,
       forceCodexInstall: typeof forceCodexInstall === "undefined" ? "" : forceCodexInstall,
+      forcePlaywrightInstall: typeof forcePlaywrightInstall === "undefined" ? "" : forcePlaywrightInstall,
+      skipPlaywrightInstall: typeof skipPlaywrightInstall === "undefined" ? "" : skipPlaywrightInstall,
+      browserDebugUrl: typeof browserDebugUrl === "undefined" ? "" : browserDebugUrl,
+      browserDevToolsJsonUrl: typeof browserDevToolsJsonUrl === "undefined" ? "" : browserDevToolsJsonUrl,
+      browserDevToolsWebSocketUrl: typeof browserDevToolsWebSocketUrl === "undefined" ? "" : browserDevToolsWebSocketUrl,
+      playwrightCdpEndpoint: typeof playwrightCdpEndpoint === "undefined" ? "" : playwrightCdpEndpoint,
+      viewerCdpEndpoint: typeof viewerCdpEndpoint === "undefined" ? "" : viewerCdpEndpoint,
+      playwrightMcpEndpoint: typeof playwrightMcpEndpoint === "undefined" ? "" : playwrightMcpEndpoint,
       mcpSkillsSourceDir: typeof mcpSkillsSourceDir === "undefined" ? "" : mcpSkillsSourceDir,
       skipSkillsInstall: typeof skipSkillsInstall === "undefined" ? "" : skipSkillsInstall,
       nocodeMcpToken: typeof nocodeMcpToken === "undefined" ? "" : nocodeMcpToken,
@@ -177,3 +189,41 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
 ↓mcpBearerTokenHandle [variables.RequestableVariable-1782509099981]: 
   comment: Server-side handle containing the MCP bearer token.
   description: Server-side handle containing the MCP bearer token.
+↓playwrightPackage [variables.RequestableVariable-1782726369212]: 
+  comment: Compatibility alias for playwrightMcpPackage. Defaults to @playwright/mcp.
+  description: Compatibility alias for playwrightMcpPackage. Defaults to @playwright/mcp.
+↓playwrightVersion [variables.RequestableVariable-1782726369232]: 
+  comment: Compatibility alias for playwrightMcpVersion. Defaults to latest.
+  description: Compatibility alias for playwrightMcpVersion. Defaults to latest.
+↓forcePlaywrightInstall [variables.RequestableVariable-1782726369251]: 
+  comment: When true, reinstall Playwright MCP even when it is already found.
+  description: When true, reinstall Playwright MCP even when it is already found.
+  schemaType: xsd:boolean
+↓skipPlaywrightInstall [variables.RequestableVariable-1782726369269]: 
+  comment: When true, skip installing Playwright MCP next to Codex.
+  description: When true, skip installing Playwright MCP next to Codex.
+  schemaType: xsd:boolean
+↓playwrightMcpPackage [variables.RequestableVariable-1782731001381]: 
+  comment: Optional npm package name for Playwright MCP. Defaults to @playwright/mcp.
+  description: Optional npm package name for Playwright MCP. Defaults to @playwright/mcp.
+↓playwrightMcpVersion [variables.RequestableVariable-1782731001403]: 
+  comment: Optional npm package version for Playwright MCP. Defaults to latest.
+  description: Optional npm package version for Playwright MCP. Defaults to latest.
+↓browserDebugUrl [variables.RequestableVariable-1782731001431]: 
+  comment: Optional CDP HTTP endpoint for the visible Studio/JxBrowser viewer.
+  description: Optional CDP HTTP endpoint for the visible Studio/JxBrowser viewer.
+↓browserDevToolsJsonUrl [variables.RequestableVariable-1782731001453]: 
+  comment: Optional DevTools /json endpoint for the visible Studio/JxBrowser viewer.
+  description: Optional DevTools /json endpoint for the visible Studio/JxBrowser viewer.
+↓browserDevToolsWebSocketUrl [variables.RequestableVariable-1782731001476]: 
+  comment: Optional DevTools WebSocket endpoint for the visible Studio/JxBrowser viewer.
+  description: Optional DevTools WebSocket endpoint for the visible Studio/JxBrowser viewer.
+↓playwrightCdpEndpoint [variables.RequestableVariable-1782731001502]: 
+  comment: Optional CDP endpoint passed to the Playwright MCP server.
+  description: Optional CDP endpoint passed to the Playwright MCP server.
+↓viewerCdpEndpoint [variables.RequestableVariable-1782731001527]: 
+  comment: Optional alias for the viewer CDP endpoint passed to Playwright MCP.
+  description: Optional alias for the viewer CDP endpoint passed to Playwright MCP.
+↓playwrightMcpEndpoint [variables.RequestableVariable-1782731001553]: 
+  comment: Optional alias for the Playwright MCP CDP endpoint.
+  description: Optional alias for the Playwright MCP CDP endpoint.

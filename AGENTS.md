@@ -35,6 +35,13 @@ same context.
   visibility matters for support and demos.
 - The Codex CLI should be installed under `<workspaceRoot>/agents/codex/npm`
   when the managed workspace install path is used.
+- The managed Codex runtime must also install `@playwright/mcp` in the same npm
+  prefix, with browser downloads disabled. Codex `config.toml` must expose it as
+  `[mcp_servers.playwright]` using `npx --prefix <workspaceRoot>/agents/codex/npm
+  playwright-mcp`.
+- Agents must use the Playwright MCP browser tools for viewer automation. Do not
+  instruct agents to run ad hoc Node scripts with `require("playwright")` or
+  `chromium.connectOverCDP(...)`.
 - Codex setup must synchronize the Convertigo Generalist skill into the managed
   `codex-home/skills/convertigo-generalist/SKILL.md` and write MCP config into
   `codex-home/config.toml`.
@@ -67,6 +74,12 @@ same context.
   capability set until its CLI exposes equivalent model/settings metadata.
 - Keep the Convertigo Generalist skill synchronized and forced by setup; it
   should not be a user-visible choice in Studio.
+- `mobile-builder-open` may return `browserDebugUrl`,
+  `browserDevToolsJsonUrl`, and `browserDevToolsWebSocketUrl`. These values
+  target the visible Studio JxBrowser mobile viewer. The bridge should pass the
+  CDP endpoint into the Codex home config so `[mcp_servers.playwright]` starts
+  `@playwright/mcp` against the visible viewer instead of opening a separate
+  browser.
 
 ## Vibe Integration
 

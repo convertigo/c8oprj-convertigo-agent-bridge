@@ -684,7 +684,7 @@
     }
   }
   C8O.agentBridge.codexSetup = function (options) {
-    options = options || {};
+    options = optionsWithRequestFallbacks(options || {});
     var install = boolValue(options.install || options.installCodex, false);
     var installation = {
       attempted: false,
@@ -750,7 +750,12 @@
     if (setup.codex.found && !setup.mcp.hasConvertigo) {
       messages.push("Codex does not list the Convertigo MCP server after setup.");
     }
-    var ready = setup.codex.found && !setup.home.error.length && skills.ok === true && setup.mcp.hasConvertigo === true;
+    var managedCodex = setup.codex.found && commandPathStartsWith(setup.codex, setup.installDir);
+    var playwrightRequired = managedCodex && !boolValue(options.skipCodexPlaywrightInstall || options.skipPlaywrightInstall, false);
+    if (playwrightRequired && (!setup.playwright || setup.playwright.found !== true)) {
+      messages.push("Playwright MCP is not available in the managed Codex runtime.");
+    }
+    var ready = setup.codex.found && !setup.home.error.length && skills.ok === true && setup.mcp.hasConvertigo === true && (!playwrightRequired || setup.playwright.found === true);
     return {
       ok: ready,
       status: ready ? "ready" : "missing",
@@ -859,7 +864,7 @@
   }
 
   C8O.agentBridge.codexStart = function (options) {
-    options = options || {};
+    options = optionsWithRequestFallbacks(options || {});
     var setup = C8O.agentBridge.codexSetup({
       workspaceRoot: options.workspaceRoot,
       installDir: options.installDir,
@@ -881,9 +886,20 @@
       allowNodeDownload: options.allowNodeDownload,
       codexPackage: options.codexPackage || options.packageName,
       codexVersion: options.codexVersion || options.packageVersion,
+      codexPlaywrightMcpPackage: options.codexPlaywrightMcpPackage || options.playwrightMcpPackage,
+      codexPlaywrightMcpVersion: options.codexPlaywrightMcpVersion || options.playwrightMcpVersion,
+      codexPlaywrightPackage: options.codexPlaywrightPackage || options.playwrightPackage,
+      codexPlaywrightVersion: options.codexPlaywrightVersion || options.playwrightVersion,
       codexInstallMethod: options.codexInstallMethod || options.installMethod,
       codexInstallTimeoutMs: options.codexInstallTimeoutMs,
       forceCodexInstall: options.forceCodexInstall || options.forceInstall,
+      forceCodexPlaywrightInstall: options.forceCodexPlaywrightInstall || options.forcePlaywrightInstall,
+      skipCodexPlaywrightInstall: options.skipCodexPlaywrightInstall || options.skipPlaywrightInstall,
+      browserDebugUrl: options.browserDebugUrl,
+      browserDevToolsJsonUrl: options.browserDevToolsJsonUrl,
+      browserDevToolsWebSocketUrl: options.browserDevToolsWebSocketUrl,
+      playwrightCdpEndpoint: options.playwrightCdpEndpoint || options.viewerCdpEndpoint,
+      playwrightMcpEndpoint: options.playwrightMcpEndpoint,
       mcpSkillsSourceDir: options.mcpSkillsSourceDir || options.skillsSourceDir || options.convertigoMcpDir,
       skipSkillsInstall: options.skipSkillsInstall || options.skipSkillSync,
       nocodeMcpTokenHandle: options.nocodeMcpTokenHandle || options.noCodeMcpTokenHandle || options.mcpBearerTokenHandle,

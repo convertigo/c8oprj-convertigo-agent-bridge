@@ -165,8 +165,32 @@ proxy du serveur. Les options principales sont :
 - `allowNodeDownload=false` : mode diagnostic/offline, sans telechargement
   Node.
 - `codexPackage`, `codexVersion` : package npm et version a installer.
+- `playwrightMcpPackage`, `playwrightMcpVersion` : package Playwright MCP a
+  installer a cote de la CLI Codex. Par defaut, le bridge installe
+  `@playwright/mcp@latest`.
 - `forceCodexInstall=true` : force la reinstall meme si une CLI est deja
   detectee.
+- `forcePlaywrightInstall=true` : force la reinstall Playwright MCP.
+- `skipPlaywrightInstall=true` : desactive l'installation Playwright MCP.
+
+Le runtime Codex gere installe aussi `@playwright/mcp` dans le meme prefixe npm,
+avec `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`. Aucun navigateur n'est telecharge par
+defaut : Playwright MCP sert a s'attacher au JxBrowser visible expose par le
+Studio via CDP (`browserDebugUrl`, `browserDevToolsWebSocketUrl` ou
+`playwrightCdpEndpoint`). Le bridge configure alors le `codex-home/config.toml`
+gere avec un serveur MCP Playwright :
+
+```toml
+[mcp_servers.playwright]
+command = "npx"
+args = ["--prefix", "<workspace>/agents/codex/npm", "playwright-mcp", "--cdp-endpoint", "http://localhost:<debug-port>", "--shared-browser-context"]
+startup_timeout_sec = 30
+enabled = true
+```
+
+Les agents doivent utiliser les outils MCP Playwright exposes par Codex. Ils ne
+doivent pas lancer de scripts ad hoc avec `require("playwright")` ni piloter un
+navigateur par CLI hors du serveur MCP.
 
 L'installation de la CLI ne configure pas l'authentification Codex. L'utilisateur
 doit toujours disposer d'une session Codex valide dans le `CODEX_HOME` choisi,

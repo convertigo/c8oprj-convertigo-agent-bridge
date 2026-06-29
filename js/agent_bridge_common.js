@@ -86,7 +86,9 @@
       "codexHomeScope", "vibeHomeScope", "homeScope", "codexHome", "vibeHome", "agentHome",
       "mcpEndpoint", "workspaceRoot", "settingsTimeoutMs", "modelsTimeoutMs",
       "nocodeMcpToken", "noCodeMcpToken", "mcpBearerToken",
-      "nocodeMcpTokenHandle", "noCodeMcpTokenHandle", "mcpBearerTokenHandle"
+      "nocodeMcpTokenHandle", "noCodeMcpTokenHandle", "mcpBearerTokenHandle",
+      "browserDebugUrl", "browserDevToolsJsonUrl", "browserDevToolsWebSocketUrl",
+      "playwrightCdpEndpoint", "playwrightMcpEndpoint", "viewerCdpEndpoint"
     ].forEach(function (name) {
       if (!trim(copy[name]).length) {
         var value = requestParameter(name);
@@ -619,6 +621,8 @@
       "",
       isNoCode ? "- Automatically follow the Convertigo NoCode workflow for C8Oforms / No-Code Studio work." : "- Automatically follow the Convertigo Generalist workflow for Convertigo project work.",
       "- Use the Convertigo MCP/tools whenever you need to inspect, modify, save, reload, or validate Convertigo projects.",
+      "- When `mobile-builder-open` returns `browserDebugUrl`, `browserDevToolsJsonUrl`, or `browserDevToolsWebSocketUrl`, treat it as the visible Studio mobile viewer and prefer inspecting or driving that viewer over opening a separate browser.",
+      "- For viewer automation, use the Playwright MCP tools exposed by the managed Codex configuration. Do not run ad hoc shell scripts with `require('playwright')`, and do not launch a separate browser unless explicitly needed.",
       isNoCode ? "- You are in the C8Oforms / No-Code Studio surface, not in Eclipse Studio. A selected Convertigo project is optional in this surface." : "- Work on the selected project unless the user explicitly asks for another project.",
       isNoCode ? "- Discover forms, applications, pages, data sources, roles, publication state, and permissions through the NoCode/C8Oforms MCP context before falling back to generic Studio project inspection." : "",
       isNoCode ? "- If the current NoCode URL, form id, route, or page id is supplied in the prompt, treat it as the default target for edits unless the user names another target." : "",
@@ -705,7 +709,156 @@
     return serverSecretGet(options.nocodeMcpTokenHandle || options.noCodeMcpTokenHandle || options.mcpBearerTokenHandle);
   }
 
+  function tomlArray(values) {
+    var parts = [];
+    for (var i = 0; i < values.length; i++) {
+      parts.push('"' + tomlEscape(values[i]) + '"');
+    }
+    return "[" + parts.join(", ") + "]";
+  }
+
+  function removeTomlSection(lines, sectionName) {
+    var range = findTomlSectionRange(lines, sectionName);
+    if (!range.found) {
+      return {
+        lines: lines,
+        removed: false
+      };
+    }
+    return {
+      lines: lines.slice(0, range.start).concat(lines.slice(range.end)),
+      removed: true
+    };
+  }
+
+  function npmPackageNameFromSpec(spec) {
+    var text = trim(spec);
+    if (!text.length) {
+      return "";
+    }
+    var slash = text.indexOf("/");
+    var at = text.lastIndexOf("@");
+    if (at > 0 && at > slash) {
+      return text.substring(0, at);
+    }
+    return text;
+  }
+
+  function resolvePlaywrightMcpCdpEndpoint(options) {
+    options = options || {};
+    var endpoint = trim(
+      options.playwrightCdpEndpoint ||
+      options.viewerCdpEndpoint ||
+      options.browserDebugUrl ||
+      options.browserDevToolsWebSocketUrl ||
+      options.browserDevToolsJsonUrl ||
+      options.playwrightMcpEndpoint
+    );
+    if (endpoint.match(/\/json\/?$/)) {
+      return endpoint.replace(/\/json\/?$/, "");
+    }
+    return endpoint;
+  }
+
+  function codexPlaywrightMcpPackageSpec(options) {
+    options = options || {};
+    var name = trim(
+      options.codexPlaywrightMcpPackage ||
+      options.playwrightMcpPackage ||
+      options.codexPlaywrightPackage ||
+      options.playwrightPackage
+    ) || "@playwright/mcp";
+    var version = trim(
+      options.codexPlaywrightMcpVersion ||
+      options.playwrightMcpVersion ||
+      options.codexPlaywrightVersion ||
+      options.playwrightVersion
+    ) || "latest";
+    if (!version.length) {
+      return name;
+    }
+    return name + "@" + version;
+  }
+
+  function codexPlaywrightMcpBinaryName(options) {
+    return trim(options && (options.codexPlaywrightMcpBinary || options.playwrightMcpBinary)) || "playwright-mcp";
+  }
+
+  function detectNpxRuntime(options) {
+    options = options || {};
+    var workspaceRoot = resolveWorkspaceRoot(options);
+    var userHome = String(System.getProperty("user.home"));
+    var localNodeDir = normalizeDirectory(options.nodeDir || options.nodeInstallDir, filePath(ProcessUtils.getDefaultNodeDir()), workspaceRoot);
+    var npxName = scriptCommandName("npx");
+    var candidates = [
+      trim(options.npxPath),
+      childPath(localNodeDir, npxName),
+      childPath(childPath(localNodeDir, "bin"), npxName)
+    ];
+    try {
+      var npmRuntime = detectNpmRuntime(options);
+      if (npmRuntime.npm && npmRuntime.npm.found) {
+        var npmParent = parentPath(npmRuntime.npm.path);
+        if (npmParent.length) {
+          candidates.push(childPath(npmParent, npxName));
+          candidates.push(childPath(parentPath(npmParent), npxName));
+        }
+      }
+    } catch (_ignoreNpxNpmCandidate) {}
+    candidates.push(childPath(childPath(userHome, ".local"), "bin/" + npxName));
+    candidates.push("/opt/homebrew/bin/npx");
+    candidates.push("/usr/local/bin/npx");
+    candidates.push("npx");
+    return firstWorkingCommand(candidates, ["--version"], nodeRuntimeSearchPath(options));
+  }
+
+  function codexPlaywrightMcpCommand(options, installDir) {
+    var npx = detectNpxRuntime(options || {});
+    return npx.found ? npx.path : "npx";
+  }
+
+  function codexPlaywrightMcpArgs(options, installDir) {
+    options = options || {};
+    var args = ["--prefix", codexNpmPrefix(installDir), codexPlaywrightMcpBinaryName(options)];
+    var endpoint = resolvePlaywrightMcpCdpEndpoint(options);
+    if (endpoint.length) {
+      args.push("--cdp-endpoint");
+      args.push(endpoint);
+      args.push("--shared-browser-context");
+    }
+    return args;
+  }
+
+  function patchCodexPlaywrightMcpConfigText(existingText, options, installDir) {
+    options = options || {};
+    var text = String(existingText == null ? "" : existingText).replace(/\r\n?/g, "\n");
+    var lines = trim(text).length ? splitTextLines(text) : [];
+    var removed = removeTomlSection(lines, "mcp_servers.playwright");
+    lines = removed.lines;
+    var endpoint = resolvePlaywrightMcpCdpEndpoint(options);
+    var enabled = endpoint.length > 0 && !boolValue(options.disablePlaywrightMcp || options.skipPlaywrightMcpConfig, false);
+    if (typeof options.playwrightMcpEnabled !== "undefined" && trim(options.playwrightMcpEnabled).length) {
+      enabled = boolValue(options.playwrightMcpEnabled, enabled);
+    }
+    if (lines.length && trim(lines[lines.length - 1]).length) {
+      lines.push("");
+    }
+    lines.push("[mcp_servers.playwright]");
+    lines.push('command = "' + tomlEscape(codexPlaywrightMcpCommand(options, installDir)) + '"');
+    lines.push("args = " + tomlArray(codexPlaywrightMcpArgs(options, installDir)));
+    lines.push("startup_timeout_sec = 30");
+    lines.push("enabled = " + (enabled ? "true" : "false"));
+    var nextText = lines.join("\n").replace(/\n+$/, "\n");
+    return {
+      status: nextText === text.replace(/\n+$/, "\n") ? "unchanged" : (text.length ? "updated" : "created"),
+      text: nextText,
+      enabled: enabled,
+      endpoint: endpoint
+    };
+  }
+
   function patchCodexMcpConfigText(existingText, mcpEndpoint, options) {
+    options = options || {};
     var text = String(existingText == null ? "" : existingText).replace(/\r\n?/g, "\n");
     var lines = trim(text).length ? splitTextLines(text) : [];
     var range = findTomlSectionRange(lines, "mcp_servers.convertigo");
@@ -728,9 +881,13 @@
         lines.push(bearerLine);
       }
       status = text.length ? "updated" : "created";
+      var withCreatedPlaywright = patchCodexPlaywrightMcpConfigText(lines.join("\n").replace(/\n+$/, "\n"), options, normalizeDirectory(options.installDir, childPath(resolveWorkspaceRoot(options), "agents/codex"), resolveWorkspaceRoot(options)));
+      if (withCreatedPlaywright.status !== "unchanged" && status !== "created") {
+        status = "updated";
+      }
       return {
         status: status,
-        text: lines.join("\n").replace(/\n+$/, "\n")
+        text: withCreatedPlaywright.text
       };
     }
 
@@ -812,9 +969,13 @@
     if (nextText === text.replace(/\n+$/, "\n")) {
       status = "unchanged";
     }
+    var withPlaywright = patchCodexPlaywrightMcpConfigText(nextText, options, normalizeDirectory(options.installDir, childPath(resolveWorkspaceRoot(options), "agents/codex"), resolveWorkspaceRoot(options)));
+    if (withPlaywright.status !== "unchanged" && status === "unchanged") {
+      status = "updated";
+    }
     return {
       status: status,
-      text: nextText
+      text: withPlaywright.text
     };
   }
 
@@ -899,6 +1060,8 @@
       "## Viewer rule",
       "",
       "- In dev, `mobile-builder-open` serves the live app from the viewer root. Prefer `viewerHomeUrl`, or fall back to `viewerBaseUrl`.",
+      "- If `mobile-builder-open` returns `browserDebugUrl`, `browserDevToolsJsonUrl`, or `browserDevToolsWebSocketUrl`, use it as the remote debugging endpoint for the visible Studio mobile viewer when browser-control tooling can attach to it.",
+      "- In managed Codex sessions, browser automation is exposed through the Playwright MCP server configured in `codex-home/config.toml`. Use the MCP browser tools; do not run ad hoc shell scripts with `require('playwright')`.",
       "- Do not open `DisplayObjects/mobile/...` against the live HMR viewer.",
       "- In prod, the application URL is `.../DisplayObjects/mobile/home`.",
       "- If `mobile-builder-open` reports `compile_error`, treat that as a generator or source-object issue. Do not patch generated runtime sources.",
@@ -2151,6 +2314,39 @@
     };
   }
 
+  function detectNodeRuntime(options) {
+    options = options || {};
+    var workspaceRoot = resolveWorkspaceRoot(options);
+    var userHome = String(System.getProperty("user.home"));
+    var localNodeDir = normalizeDirectory(options.nodeDir || options.nodeInstallDir, filePath(ProcessUtils.getDefaultNodeDir()), workspaceRoot);
+    var nodeName = executableName("node");
+    var candidates = [
+      trim(options.nodePath || options.nodeCommand || options.nodeExecutable),
+      childPath(localNodeDir, nodeName),
+      childPath(childPath(localNodeDir, "bin"), nodeName)
+    ];
+    try {
+      var defaultNodeDir = filePath(ProcessUtils.getDefaultNodeDir());
+      candidates.push(childPath(defaultNodeDir, nodeName));
+      candidates.push(childPath(childPath(defaultNodeDir, "bin"), nodeName));
+    } catch (_ignoreDefaultNodeCandidate) {}
+    try {
+      var npmRuntime = detectNpmRuntime(options);
+      if (npmRuntime.npm && npmRuntime.npm.found) {
+        var npmParent = parentPath(npmRuntime.npm.path);
+        if (npmParent.length) {
+          candidates.push(childPath(npmParent, nodeName));
+          candidates.push(childPath(parentPath(npmParent), nodeName));
+        }
+      }
+    } catch (_ignoreNpmNodeCandidate) {}
+    candidates.push(childPath(childPath(userHome, ".local"), "bin/" + nodeName));
+    candidates.push("/opt/homebrew/bin/" + nodeName);
+    candidates.push("/usr/local/bin/" + nodeName);
+    candidates.push("node");
+    return firstWorkingCommand(candidates, ["--version"], nodeRuntimeSearchPath(options));
+  }
+
   function ensureNpmRuntime(options) {
     options = options || {};
     var detected = detectNpmRuntime(options);
@@ -2196,6 +2392,14 @@
     return childPath(childPath(childPath(installDir, "npm"), "node_modules/.bin"), scriptCommandName("codex"));
   }
 
+  function codexNpmPrefix(installDir) {
+    return childPath(installDir, "npm");
+  }
+
+  function codexNodeModulesPath(installDir) {
+    return childPath(codexNpmPrefix(installDir), "node_modules");
+  }
+
   function codexPackageSpec(options) {
     var name = trim(options.codexPackage || options.packageName) || "@openai/codex";
     var version = trim(options.codexVersion || options.packageVersion || options.version) || "latest";
@@ -2205,7 +2409,145 @@
     return name + "@" + version;
   }
 
-  function runNpmInstall(npm, packageSpec, prefixDir, options) {
+  function codexPlaywrightEnv(options, installDir) {
+    var env = {};
+    var path = nodeRuntimeSearchPath(options || {});
+    if (path.length) {
+      env.PATH = path + String(File.pathSeparator) + String(System.getenv("PATH") || "");
+    }
+    env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+    return env;
+  }
+
+  function detectCodexPlaywrightRuntime(options, installDir) {
+    options = options || {};
+    var packageSpec = codexPlaywrightMcpPackageSpec(options);
+    var packageName = npmPackageNameFromSpec(packageSpec);
+    var nodeModules = codexNodeModulesPath(installDir);
+    var packagePath = childPath(childPath(nodeModules, packageName), "package.json");
+    var binPath = childPath(childPath(nodeModules, ".bin"), codexPlaywrightMcpBinaryName(options));
+    var node = detectNodeRuntime(options);
+    var npx = detectNpxRuntime(options);
+    var runtime = {
+      found: false,
+      package: packageName,
+      packageSpec: packageSpec,
+      packagePath: packagePath,
+      packageExists: new File(packagePath).exists(),
+      binPath: binPath,
+      binExists: new File(binPath).exists(),
+      nodeModules: nodeModules,
+      version: "",
+      node: node,
+      npx: npx,
+      probe: {
+        checked: false,
+        ok: false,
+        stdout: "",
+        stderr: "",
+        error: ""
+      },
+      env: {
+        nodePath: nodeModules,
+        skipBrowserDownload: true
+      }
+    };
+    if (!runtime.packageExists) {
+      runtime.probe.error = packageName + " is not installed";
+      return runtime;
+    }
+    try {
+      var packageJson = JSON.parse(readTextFile(new File(packagePath)));
+      runtime.version = trim(packageJson.version);
+    } catch (_ignorePlaywrightMcpPackageJson) {}
+    if (!npx.found) {
+      runtime.probe.error = "npx is not available";
+      return runtime;
+    }
+    if (!node.found) {
+      runtime.probe.error = "node is not available";
+      return runtime;
+    }
+    var probe = runCommand([npx.path, "--prefix", codexNpmPrefix(installDir), codexPlaywrightMcpBinaryName(options), "--version"], {
+      timeoutMs: 15000,
+      env: codexPlaywrightEnv(options, installDir)
+    });
+    runtime.probe.checked = true;
+    runtime.probe.ok = probe.ok;
+    runtime.probe.stdout = probe.stdout;
+    runtime.probe.stderr = probe.stderr;
+    runtime.probe.error = probe.error;
+    runtime.found = probe.ok;
+    if (!runtime.version.length) {
+      runtime.version = trim((probe.stdout || "") + "\n" + (probe.stderr || "")).replace(/^Version\s+/i, "").split(/\r?\n/)[0] || "";
+    }
+    return runtime;
+  }
+
+  function ensureCodexPlaywrightRuntime(options, installDir) {
+    options = options || {};
+    var before = detectCodexPlaywrightRuntime(options, installDir);
+    if (boolValue(options.skipCodexPlaywrightInstall || options.skipPlaywrightInstall, false)) {
+      return {
+        attempted: false,
+        installed: false,
+        reused: before.found,
+        skipped: true,
+        method: "skipped",
+        package: "",
+        before: before,
+        playwright: before,
+        steps: [],
+        timestamp: now()
+      };
+    }
+    var force = boolValue(options.forceCodexPlaywrightInstall || options.forcePlaywrightInstall || options.forceCodexInstall || options.forceInstall || options.force, false);
+    if (before.found && !force) {
+      return {
+        attempted: false,
+        installed: false,
+        reused: true,
+        skipped: false,
+        method: "existing",
+        package: "",
+        before: before,
+        playwright: before,
+        steps: [],
+        timestamp: now()
+      };
+    }
+    var npmPrefix = codexNpmPrefix(installDir);
+    ensureDirectory(new File(npmPrefix));
+    var npmRuntime = ensureNpmRuntime(options);
+    var packageSpec = codexPlaywrightMcpPackageSpec(options);
+    var installEnv = {
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+    };
+    var install = runNpmInstall(npmRuntime.npm, packageSpec, npmPrefix, options, installEnv);
+    var steps = [{ action: "npm_install", package: packageSpec, prefix: npmPrefix, env: installEnv, result: install }];
+    if (!install.ok) {
+      throw new Error("Unable to install Playwright MCP for Codex with npm: " + (install.stderr || install.stdout || install.error));
+    }
+    var after = detectCodexPlaywrightRuntime(options, installDir);
+    if (!after.found) {
+      throw new Error("Playwright MCP package was installed but cannot be executed from " + codexNodeModulesPath(installDir));
+    }
+    return {
+      attempted: true,
+      installed: true,
+      reused: false,
+      skipped: false,
+      method: "npm",
+      package: packageSpec,
+      npm: npmRuntime,
+      before: before,
+      playwright: after,
+      steps: steps,
+      timestamp: now()
+    };
+  }
+
+  function runNpmInstall(npm, packageSpec, prefixDir, options, extraEnv) {
     var npmDir = parentPath(npm.path);
     var paths = npmDir.length ? npmDir : "";
     var normalizedNpmDir = npmDir.replace(/\\/g, "/");
@@ -2219,6 +2561,7 @@
     var pb = ProcessUtils.getNpmProcessBuilder(paths, command);
     return runProcessBuilder(pb, {
       cwd: prefixDir,
+      env: extraEnv || null,
       timeoutMs: intValue(options.codexInstallTimeoutMs || options.npmInstallTimeoutMs, 600000, 30000, 1800000)
     });
   }
@@ -2230,6 +2573,18 @@
     var workspaceFirstOption = typeof options.workspaceInstallFirst !== "undefined" ? options.workspaceInstallFirst : options.preferWorkspaceInstall;
     var workspaceFirst = boolValue(typeof workspaceFirstOption === "undefined" ? true : workspaceFirstOption, true);
     if (before.codex.found && !force && (!workspaceFirst || commandPathStartsWith(before.codex, before.installDir))) {
+      var existingPlaywright = commandPathStartsWith(before.codex, before.installDir) ? ensureCodexPlaywrightRuntime(options, before.installDir) : {
+        attempted: false,
+        installed: false,
+        reused: false,
+        skipped: true,
+        method: "external_codex",
+        package: "",
+        before: detectCodexPlaywrightRuntime(options, before.installDir),
+        playwright: detectCodexPlaywrightRuntime(options, before.installDir),
+        steps: [],
+        timestamp: now()
+      };
       return {
         attempted: false,
         installed: false,
@@ -2239,6 +2594,7 @@
         npm: null,
         before: before.codex,
         codex: before.codex,
+        playwright: existingPlaywright,
         steps: [],
         timestamp: now()
       };
@@ -2252,6 +2608,18 @@
     try {
       before = detectCodexRuntime(options);
       if (before.codex.found && !force && (!workspaceFirst || commandPathStartsWith(before.codex, before.installDir))) {
+        var lockedPlaywright = commandPathStartsWith(before.codex, before.installDir) ? ensureCodexPlaywrightRuntime(options, before.installDir) : {
+          attempted: false,
+          installed: false,
+          reused: false,
+          skipped: true,
+          method: "external_codex",
+          package: "",
+          before: detectCodexPlaywrightRuntime(options, before.installDir),
+          playwright: detectCodexPlaywrightRuntime(options, before.installDir),
+          steps: [],
+          timestamp: now()
+        };
         return {
           attempted: true,
           installed: false,
@@ -2261,6 +2629,7 @@
           npm: null,
           before: before.codex,
           codex: before.codex,
+          playwright: lockedPlaywright,
           steps: steps,
           timestamp: now()
         };
@@ -2268,7 +2637,7 @@
       var fallbackCodex = before.codex.found && !commandPathStartsWith(before.codex, before.installDir) ? before.codex : null;
       try {
         ensureDirectory(new File(before.installDir));
-        var npmPrefix = childPath(before.installDir, "npm");
+        var npmPrefix = codexNpmPrefix(before.installDir);
         ensureDirectory(new File(npmPrefix));
         var npmRuntime = ensureNpmRuntime(options);
         var packageSpec = codexPackageSpec(options);
@@ -2288,6 +2657,7 @@
         if (!after.codex.found) {
           throw new Error("Codex CLI package was installed but no runnable codex executable was found");
         }
+        var playwright = ensureCodexPlaywrightRuntime(options, before.installDir);
         return {
           attempted: true,
           installed: true,
@@ -2298,6 +2668,7 @@
           before: before.codex,
           codex: after.codex,
           codexPath: after.codex.path,
+          playwright: playwright,
           steps: steps,
           timestamp: now()
         };
@@ -2313,6 +2684,18 @@
             before: before.codex,
             codex: fallbackCodex,
             codexPath: fallbackCodex.path,
+            playwright: {
+              attempted: false,
+              installed: false,
+              reused: false,
+              skipped: true,
+              method: "workspace_install_failed_user_fallback",
+              package: "",
+              before: detectCodexPlaywrightRuntime(options, before.installDir),
+              playwright: detectCodexPlaywrightRuntime(options, before.installDir),
+              steps: [],
+              timestamp: now()
+            },
             steps: steps,
             error: String(installError),
             timestamp: now()
@@ -2600,19 +2983,13 @@
       checked: false,
       ok: false,
       hasConvertigo: false,
+      hasPlaywright: false,
       stdout: "",
       stderr: "",
       error: ""
     };
     if (command.found) {
-      var env = {};
-      var path = nodeRuntimeSearchPath(options);
-      if (path.length) {
-        env.PATH = path + String(File.pathSeparator) + String(System.getenv("PATH") || "");
-      }
-      if (codexHome.path.length) {
-        env.CODEX_HOME = codexHome.path;
-      }
+      var env = codexRuntimeEnv(options, codexHome.path);
       var mcpProbe = runCommand([command.path, "mcp", "list"], { timeoutMs: 15000, env: env });
       mcp.checked = true;
       mcp.ok = mcpProbe.ok;
@@ -2621,6 +2998,7 @@
       mcp.error = mcpProbe.error;
       var mcpText = String((mcpProbe.stdout || "") + "\n" + (mcpProbe.stderr || "")).toLowerCase();
       mcp.hasConvertigo = mcpText.indexOf("convertigo") >= 0;
+      mcp.hasPlaywright = mcpText.indexOf("playwright") >= 0;
     }
     return {
       workspaceRoot: workspaceRoot,
@@ -2629,20 +3007,24 @@
       home: publicHomeInfo(codexHome),
       mcpEndpoint: resolveMcpEndpoint(options),
       codex: command,
+      playwright: detectCodexPlaywrightRuntime(options, installDir),
       mcp: mcp
     };
   }
 
   function codexRuntimeEnv(options, codexHomePath) {
     var env = {};
-    var path = nodeRuntimeSearchPath(options || {});
+    options = options || {};
+    var workspaceRoot = resolveWorkspaceRoot(options);
+    var installDir = normalizeDirectory(options.installDir, childPath(workspaceRoot, "agents/codex"), workspaceRoot);
+    var path = nodeRuntimeSearchPath(options);
     if (path.length) {
       env.PATH = path + String(File.pathSeparator) + String(System.getenv("PATH") || "");
     }
     if (trim(codexHomePath).length) {
       env.CODEX_HOME = trim(codexHomePath);
     }
-    var noCodeToken = noCodeMcpBearerToken(options || {});
+    var noCodeToken = noCodeMcpBearerToken(options);
     if (noCodeToken.length) {
       env[NOCODE_MCP_TOKEN_ENV] = noCodeToken;
     }
