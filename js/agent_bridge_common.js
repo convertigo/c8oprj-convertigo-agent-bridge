@@ -533,7 +533,10 @@
     return null;
   }
 
-  function setupCodexFromMcpProject(options, codexHome, mcpEndpoint) {
+  function setupCodexFromMcpProject(options, codexHome, mcpEndpoint, profile) {
+    var normalizedProfile = normalizeSkillProfile({ agentProfile: profile });
+    var skillKey = normalizedProfile === "nocode" ? "nocode" : "generalist";
+    var skillLabel = managedSkillLabel(normalizedProfile);
     var report = {
       attempted: false,
       ok: false,
@@ -563,12 +566,17 @@
       if (result === null) {
         throw new Error("ConvertigoMCP._setupCodex did not return a setup result");
       }
+      var skillInfo = result.skills && result.skills[skillKey] ? result.skills[skillKey] : null;
+      if (normalizedProfile === "nocode" && skillInfo === null) {
+        throw new Error("ConvertigoMCP._setupCodex did not return convertigo-nocode skill details");
+      }
+      var skillPaths = result.skillPaths && typeof result.skillPaths === "object" ? result.skillPaths : {};
       report.ok = true;
-      report.skillStatus = trim(result.skillStatus) || "unknown";
+      report.skillStatus = trim(skillInfo && skillInfo.status) || trim(result.skillStatus) || "unknown";
       report.configStatus = trim(result.configStatus) || "unknown";
       report.resolvedCodexHome = trim(result.resolvedCodexHome) || report.resolvedCodexHome;
       report.resolvedMcpUrl = trim(result.resolvedMcpUrl) || report.resolvedMcpUrl;
-      report.skillPath = trim(result.skillPath);
+      report.skillPath = trim(skillInfo && skillInfo.path) || trim(skillPaths[skillKey]) || trim(result.skillPath);
       if (result.warnings && typeof result.warnings.length !== "undefined") {
         for (var i = 0; i < result.warnings.length; i++) {
           var warning = trim(result.warnings[i]);
@@ -577,7 +585,7 @@
           }
         }
       }
-      report.message = "Convertigo Generalist skill synchronized from ConvertigoMCP._setupCodex";
+      report.message = skillLabel + " skill synchronized from ConvertigoMCP._setupCodex";
     } catch (e) {
       report.ok = false;
       report.error = String(e);
@@ -681,13 +689,26 @@
     return null;
   }
 
+  function normalizeNoCodeSkillContent(content, mcpEndpoint) {
+    var text = String(content == null ? "" : content);
+    var versionLine = "- Skill guidance version: `" + MCP_GUIDANCE_VERSION + "`.";
+    var endpointLine = "- Expected MCP endpoint: `" + trim(mcpEndpoint) + "`.";
+    if (/^- Skill guidance version: `[^`]*`\./m.test(text)) {
+      text = text.replace(/^- Skill guidance version: `[^`]*`\./m, versionLine);
+    }
+    if (/^- Expected MCP endpoint: `[^`]*`\./m.test(text)) {
+      text = text.replace(/^- Expected MCP endpoint: `[^`]*`\./m, endpointLine);
+    }
+    return text;
+  }
+
   function managedSkillContent(options, profile, mcpEndpoint) {
     var normalizedProfile = normalizeSkillProfile({ agentProfile: profile });
     if (normalizedProfile === "nocode") {
       var noCodeFile = noCodeSkillSourceFile(options);
       if (noCodeFile !== null) {
         return {
-          content: readTextFile(noCodeFile),
+          content: normalizeNoCodeSkillContent(readTextFile(noCodeFile), mcpEndpoint),
           source: filePath(noCodeFile),
           copied: true
         };
@@ -1258,6 +1279,12 @@
       "",
       "Use this skill when the Assistant is embedded in C8Oforms or any Convertigo No-Code Studio surface.",
       "",
+      "## Skill freshness",
+      "",
+      "- Skill guidance version: `" + MCP_GUIDANCE_VERSION + "`.",
+      "- During bootstrap, compare this value with `MCP guidance version` in `convertigo://capabilities`. If the MCP value differs or is missing, rerun the Studio Codex setup for the current MCP endpoint before using no-code mutation tools.",
+      "- When the caller surface supports MCP request metadata, send `params._meta.convertigoGuidanceVersion` with this skill guidance version on the first guarded Convertigo `tools/call`; raw HTTP clients may use the `X-Convertigo-Guidance-Version` header. The MCP only warns on bootstrap or mutation guard tools, so treat `_meta.convertigoGuidanceWarning` as a setup refresh signal before further no-code mutation.",
+      "",
       "## Mandatory workflow",
       "",
       "1. Call `resources/list` and `prompts/list` when available.",
@@ -1321,8 +1348,8 @@
       var codexHome = new File(effectiveCodexHomePath(homePath));
       var skillFile = new File(new File(new File(codexHome, "skills"), skillSlug), "SKILL.md");
       var configFile = new File(codexHome, "config.toml");
-      if (profile === "generalist" && !boolValue(options.skipMcpProjectSkillSync || options.skipSetupCodexDelegate, false)) {
-        var delegated = setupCodexFromMcpProject(options, codexHome, report.resolvedMcpUrl);
+      if (!boolValue(options.skipMcpProjectSkillSync || options.skipSetupCodexDelegate, false)) {
+        var delegated = setupCodexFromMcpProject(options, codexHome, report.resolvedMcpUrl, profile);
         if (delegated.attempted === true && delegated.ok === true) {
           var delegatedConfig = readTextFile(configFile);
           var delegatedPatch = patchCodexMcpConfigText(delegatedConfig, delegated.resolvedMcpUrl, options);
