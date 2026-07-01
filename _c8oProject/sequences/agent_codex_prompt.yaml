@@ -11,6 +11,12 @@ comment: Send a prompt to Codex CLI through codex exec --json. Poll agent_events
       model: typeof model === "undefined" ? "" : model,
       reasoningEffort: typeof reasoningEffort === "undefined" ? "" : reasoningEffort,
       serviceTier: typeof serviceTier === "undefined" ? "" : serviceTier,
+      browserDebugUrl: typeof browserDebugUrl === "undefined" ? "" : browserDebugUrl,
+      browserDevToolsJsonUrl: typeof browserDevToolsJsonUrl === "undefined" ? "" : browserDevToolsJsonUrl,
+      browserDevToolsWebSocketUrl: typeof browserDevToolsWebSocketUrl === "undefined" ? "" : browserDevToolsWebSocketUrl,
+      playwrightCdpEndpoint: typeof playwrightCdpEndpoint === "undefined" ? "" : playwrightCdpEndpoint,
+      viewerCdpEndpoint: typeof viewerCdpEndpoint === "undefined" ? "" : viewerCdpEndpoint,
+      playwrightMcpEndpoint: typeof playwrightMcpEndpoint === "undefined" ? "" : playwrightMcpEndpoint,
       bypassApprovalsAndSandbox: typeof bypassApprovalsAndSandbox === "undefined" ? "" : bypassApprovalsAndSandbox,
       sandbox: typeof sandbox === "undefined" ? "" : sandbox
     });'
@@ -57,3 +63,21 @@ comment: Send a prompt to Codex CLI through codex exec --json. Poll agent_events
 ↓serviceTier [variables.RequestableVariable-1782119617587]: 
   comment: Optional Codex service tier override, such as priority.
   description: Optional Codex service tier override, such as priority.
+↓browserDebugUrl [variables.RequestableVariable-1782899534753]:
+  comment: Visible Studio viewer remote debugging URL.
+  description: Visible Studio viewer remote debugging URL.
+↓browserDevToolsJsonUrl [variables.RequestableVariable-1782899550957]:
+  comment: Visible Studio viewer DevTools JSON URL.
+  description: Visible Studio viewer DevTools JSON URL.
+↓browserDevToolsWebSocketUrl [variables.RequestableVariable-1782899551094]:
+  comment: Visible Studio viewer DevTools websocket URL.
+  description: Visible Studio viewer DevTools websocket URL.
+↓playwrightCdpEndpoint [variables.RequestableVariable-1782899551215]:
+  comment: CDP endpoint used by Playwright MCP to attach to the visible viewer.
+  description: CDP endpoint used by Playwright MCP to attach to the visible viewer.
+↓viewerCdpEndpoint [variables.RequestableVariable-1782899551340]:
+  comment: Alias for the visible viewer CDP endpoint.
+  description: Alias for the visible viewer CDP endpoint.
+↓playwrightMcpEndpoint [variables.RequestableVariable-1782899551464]:
+  comment: Optional Playwright MCP endpoint override.
+  description: Optional Playwright MCP endpoint override.

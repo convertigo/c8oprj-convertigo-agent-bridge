@@ -9,6 +9,7 @@
   var MAX_EVENT_LIMIT = 500;
   var MAX_EVENT_BUFFER = 5000;
   var NOCODE_MCP_TOKEN_ENV = "C8O_NOCODE_MCP_TOKEN";
+  var MCP_GUIDANCE_VERSION = "2026-07-01.skill-sync-v2";
 
   var File = Packages.java.io.File;
   var FileOutputStream = Packages.java.io.FileOutputStream;
@@ -23,6 +24,7 @@
   var System = Packages.java.lang.System;
   var UUID = Packages.java.util.UUID;
   var ArrayList = Packages.java.util.ArrayList;
+  var HashMap = Packages.java.util.HashMap;
   var ConcurrentHashMap = Packages.java.util.concurrent.ConcurrentHashMap;
   var LinkedHashMap = Packages.java.util.LinkedHashMap;
   var Collections = Packages.java.util.Collections;
@@ -32,6 +34,10 @@
   var StandardCopyOption = Packages.java.nio.file.StandardCopyOption;
   var StandardOpenOption = Packages.java.nio.file.StandardOpenOption;
   var MessageDigest = Packages.java.security.MessageDigest;
+  var InternalRequester = Packages.com.twinsoft.convertigo.engine.requesters.InternalRequester;
+  var XMLUtils = Packages.com.twinsoft.convertigo.engine.util.XMLUtils;
+  var JsonOutput = Packages.com.twinsoft.convertigo.engine.enums.JsonOutput;
+  var Engine = Packages.com.twinsoft.convertigo.engine.Engine;
   var ProcessUtils = Packages.com.twinsoft.convertigo.engine.util.ProcessUtils;
 
   var DEFAULT_PYTHON_VERSION = "3.12.13";
@@ -463,6 +469,123 @@
     return null;
   }
 
+  function callLocalSequence(project, sequence, variables) {
+    var params = new HashMap();
+    var projectArray = java.lang.reflect.Array.newInstance(java.lang.String, 1);
+    var sequenceArray = java.lang.reflect.Array.newInstance(java.lang.String, 1);
+    projectArray[0] = String(project);
+    sequenceArray[0] = String(sequence);
+    params.put("__project", projectArray);
+    params.put("__sequence", sequenceArray);
+    params.put("__context", "agentBridge_" + String(now()));
+    variables = variables || {};
+    for (var key in variables) {
+      if (Object.prototype.hasOwnProperty.call(variables, key) && variables[key] !== null && typeof variables[key] !== "undefined") {
+        params.put(String(key), String(variables[key]));
+      }
+    }
+    var requester = null;
+    try {
+      requester = new InternalRequester(params, context.httpServletRequest);
+    } catch (_ignoreHttpRequest) {
+      requester = new InternalRequester(params);
+    }
+    var response = requester.processRequest();
+    try {
+      var json = JSON.parse(XMLUtils.XmlToJson(response.getDocumentElement(), true, true, JsonOutput.JsonRoot.docNode).toString());
+      return json;
+    } finally {
+      try {
+        var ctx2 = requester.getContext();
+        Engine.theApp.contextManager.remove(ctx2);
+      } catch (_ignoreContextCleanup) {}
+    }
+  }
+
+  function findSetupCodexResult(value, depth) {
+    if (value === null || typeof value === "undefined" || typeof value !== "object" || depth > 8) {
+      return null;
+    }
+    if (Object.prototype.hasOwnProperty.call(value, "skillStatus") &&
+        (Object.prototype.hasOwnProperty.call(value, "resolvedCodexHome") || Object.prototype.hasOwnProperty.call(value, "skillPath"))) {
+      return value;
+    }
+    var preferred = ["setupCodexResult", "result", "document", "doc", "payload", "response"];
+    for (var i = 0; i < preferred.length; i++) {
+      if (Object.prototype.hasOwnProperty.call(value, preferred[i])) {
+        var found = findSetupCodexResult(value[preferred[i]], depth + 1);
+        if (found !== null) {
+          return found;
+        }
+      }
+    }
+    for (var key in value) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        var nested = value[key];
+        if (nested !== null && typeof nested === "object") {
+          var nestedFound = findSetupCodexResult(nested, depth + 1);
+          if (nestedFound !== null) {
+            return nestedFound;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  function setupCodexFromMcpProject(options, codexHome, mcpEndpoint) {
+    var report = {
+      attempted: false,
+      ok: false,
+      source: "ConvertigoMCP._setupCodex",
+      skillStatus: "",
+      configStatus: "",
+      resolvedCodexHome: filePath(codexHome),
+      resolvedMcpUrl: trim(mcpEndpoint) || resolveMcpEndpoint(options),
+      skillPath: "",
+      warnings: [],
+      dryRun: boolValue(options.dryRun, false),
+      message: "",
+      error: ""
+    };
+    if (projectDirectoryByName("ConvertigoMCP") === null) {
+      report.message = "ConvertigoMCP project not loaded; using bridge fallback skill generator";
+      return report;
+    }
+    report.attempted = true;
+    try {
+      var response = callLocalSequence("ConvertigoMCP", "_setupCodex", {
+        codexHome: filePath(codexHome),
+        mcpUrl: report.resolvedMcpUrl,
+        dryRun: report.dryRun ? "true" : "false"
+      });
+      var result = findSetupCodexResult(response, 0);
+      if (result === null) {
+        throw new Error("ConvertigoMCP._setupCodex did not return a setup result");
+      }
+      report.ok = true;
+      report.skillStatus = trim(result.skillStatus) || "unknown";
+      report.configStatus = trim(result.configStatus) || "unknown";
+      report.resolvedCodexHome = trim(result.resolvedCodexHome) || report.resolvedCodexHome;
+      report.resolvedMcpUrl = trim(result.resolvedMcpUrl) || report.resolvedMcpUrl;
+      report.skillPath = trim(result.skillPath);
+      if (result.warnings && typeof result.warnings.length !== "undefined") {
+        for (var i = 0; i < result.warnings.length; i++) {
+          var warning = trim(result.warnings[i]);
+          if (warning.length) {
+            report.warnings.push(warning);
+          }
+        }
+      }
+      report.message = "Convertigo Generalist skill synchronized from ConvertigoMCP._setupCodex";
+    } catch (e) {
+      report.ok = false;
+      report.error = String(e);
+      report.message = "Unable to synchronize from ConvertigoMCP._setupCodex; using bridge fallback skill generator";
+    }
+    return report;
+  }
+
   function mcpSkillSourceCandidate(options) {
     var explicit = trim(options.mcpSkillsSourceDir || options.skillsSourceDir || options.convertigoMcpDir);
     if (explicit.length) {
@@ -622,6 +745,7 @@
       isNoCode ? "- Automatically follow the Convertigo NoCode workflow for C8Oforms / No-Code Studio work." : "- Automatically follow the Convertigo Generalist workflow for Convertigo project work.",
       "- Use the Convertigo MCP/tools whenever you need to inspect, modify, save, reload, or validate Convertigo projects.",
       "- When `mobile-builder-open` returns `browserDebugUrl`, `browserDevToolsJsonUrl`, or `browserDevToolsWebSocketUrl`, treat it as the visible Studio mobile viewer and prefer inspecting or driving that viewer over opening a separate browser.",
+      "- Studio JxBrowser exposes one visible viewer target over CDP. Reuse the current browser-control target; do not create new tabs or pages for the mobile builder.",
       "- For viewer automation, use the Playwright MCP tools exposed by the managed Codex configuration. Do not run ad hoc shell scripts with `require('playwright')`, and do not launch a separate browser unless explicitly needed.",
       isNoCode ? "- You are in the C8Oforms / No-Code Studio surface, not in Eclipse Studio. A selected Convertigo project is optional in this surface." : "- Work on the selected project unless the user explicitly asks for another project.",
       isNoCode ? "- Discover forms, applications, pages, data sources, roles, publication state, and permissions through the NoCode/C8Oforms MCP context before falling back to generic Studio project inspection." : "",
@@ -706,7 +830,30 @@
     if (direct.length) {
       return direct;
     }
-    return serverSecretGet(options.nocodeMcpTokenHandle || options.noCodeMcpTokenHandle || options.mcpBearerTokenHandle);
+    var fromHandle = serverSecretGet(options.nocodeMcpTokenHandle || options.noCodeMcpTokenHandle || options.mcpBearerTokenHandle);
+    if (fromHandle.length) {
+      return fromHandle;
+    }
+    return noCodeMcpBearerTokenFromFile(options);
+  }
+
+  function noCodeMcpBearerTokenFromFile(options) {
+    options = options || {};
+    var userId = trim(optionOrRequest(options, "userId"));
+    if (!userId.length) {
+      return "";
+    }
+    try {
+      var tokenFile = new File(new File(new File(new File(resolveWorkspaceRoot(options), "agents"), "nocode"), "users"), userPathSlug(userId));
+      tokenFile = new File(tokenFile, "mcp-token.json");
+      if (!tokenFile.isFile()) {
+        return "";
+      }
+      var record = JSON.parse(readTextFile(tokenFile));
+      return trim(record && record.token);
+    } catch (_ignoreNoCodeTokenFile) {
+      return "";
+    }
   }
 
   function tomlArray(values) {
@@ -1020,19 +1167,28 @@
       "",
       "Use this skill for general Convertigo work. Keep it procedural and rely on the MCP guides for the detailed knowledge.",
       "",
+      "## Skill freshness",
+      "",
+      "- Skill guidance version: `" + MCP_GUIDANCE_VERSION + "`.",
+      "- During bootstrap, compare this value with `MCP guidance version` in `convertigo://capabilities`. If the MCP value differs or is missing, treat the installed skill and MCP endpoint as out of sync; rerun the Studio Codex setup for the current MCP endpoint or ask before project mutation.",
+      "- When the caller surface supports MCP request metadata, send `params._meta.convertigoGuidanceVersion` with this skill guidance version on the first guarded Convertigo `tools/call`; raw HTTP clients may use the `X-Convertigo-Guidance-Version` header. The MCP only warns on bootstrap or mutation guard tools, so treat `_meta.convertigoGuidanceWarning` as a setup refresh signal before further project mutation.",
+      "",
       "## Mandatory bootstrap",
       "",
       "1. Call `resources/list`.",
       "2. If the caller surface exposes it, call `prompts/list`.",
       "3. Read `convertigo://capabilities`.",
-      "4. Read `convertigo://recipes/quickstart`.",
-      "5. Read `convertigo://resources/convertigo-start`.",
-      "6. Only then decide the route:",
+      "4. Verify the skill freshness rule above against the `MCP guidance version` from capabilities.",
+      "5. Read `convertigo://recipes/quickstart`.",
+      "6. Read `convertigo://resources/convertigo-start`.",
+      "7. Only then decide the route:",
       "   - Standard SQL CRUD + starter NGX UI: read `convertigo://resources/convertigo-crud-fastpath` and use `convertigo-crud-fastpath`.",
       "   - Existing deterministic CRUD project edits: also read `convertigo://resources/convertigo-crud-edit-fastpath`, then stay on the CRUD rail without replaying the new-project bootstrap.",
+      "   - New starter NGX app outside the CRUD rail: read `convertigo://resources/convertigo-recipe-starter-extension` before import, then if the app has backend or open-data results, read `convertigo://resources/convertigo-recipe-ngx-data-page` before any page mutation.",
+      "   - NGX / Ionic UI creation or edits outside the CRUD rail: read `convertigo://resources/convertigo-recipe-ngx-data-page` first for data-backed pages, then `convertigo://resources/convertigo-frontend-ngx` before UI mutations.",
       "   - Non-CRUD work or tasks outside the deterministic rail: stay exploratory and follow `convertigo-quickstart`.",
-      "7. Do not call `rag-query` before the start guide and the chosen recipe were read.",
-      "8. If the user explicitly wants MCP-only work or the starting workspace is empty/non-relevant, do not inspect the local shell workspace before the MCP route decision is made.",
+      "8. Do not call `rag-query` before the start guide and the chosen recipe were read.",
+      "9. If the user explicitly wants MCP-only work or the starting workspace is empty/non-relevant, do not inspect the local shell workspace before the MCP route decision is made.",
       "",
       "## CRUD routing",
       "",
@@ -1040,8 +1196,8 @@
       "- Decide it yourself: use the CRUD rail only when the task is a standard SQL CRUD + starter NGX UI fit.",
       "- Generic CRUD UI default: `ui.variant=entity-pages`.",
       "- CRM-specific UI default: `ui.variant=master-detail`.",
-      "- For a new UI project, validate the name, run `marketplace-import` with that exact name, open the viewer immediately with `mobile-builder-open`, then continue with `upsert-crud` and the staged UI kit.",
-      "- For an existing deterministic CRUD project that is already green, use the edit rail: `crud-status` -> `upsert-crud` -> backend `crud-proof` -> one `upsert-ngx-crud-kit stage=final` -> `mobile-builder-open` -> final `crud-proof(viewerUrl)` -> optional `project-save`.",
+      "- For a new UI project, validate the name, run `marketplace-import` with that exact name, open the viewer immediately with `mobile-builder-open(wait=false)`, then continue with `upsert-crud` and the staged UI kit while the builder warms up.",
+      "- For an existing deterministic CRUD project that is already green, use the edit rail: `crud-status` -> optional early `mobile-builder-open(wait=false)` when UI work is likely -> `upsert-crud` -> backend `crud-proof` -> one `upsert-ngx-crud-kit stage=final` -> `mobile-builder-open(stateOnly=true, wait=true)` -> final `crud-proof(viewerUrl)` -> optional `project-save`.",
       "- For a low-detail CRUD prompt, stop after the first green scaffold + demo data: starter import, viewer open, `upsert-crud`, backend proof, `upsert-ngx-crud-kit` bootstrap/final, final UI proof, optional `project-save`, then return.",
       "- When relations are obvious, declare them explicitly in `spec.relations[]` instead of relying only on flat FK fields. Prefer entity UI hints such as `ui.relationFields` over direct edits on generated CRUD-kit components.",
       "- Prefer `seed.data` for explicit business demo rows. Do not patch `init_schema` manually after generation when `seed.data` can express the dataset in the spec.",
@@ -1060,8 +1216,10 @@
       "## Viewer rule",
       "",
       "- In dev, `mobile-builder-open` serves the live app from the viewer root. Prefer `viewerHomeUrl`, or fall back to `viewerBaseUrl`.",
-      "- If `mobile-builder-open` returns `browserDebugUrl`, `browserDevToolsJsonUrl`, or `browserDevToolsWebSocketUrl`, use it as the remote debugging endpoint for the visible Studio mobile viewer when browser-control tooling can attach to it.",
-      "- In managed Codex sessions, browser automation is exposed through the Playwright MCP server configured in `codex-home/config.toml`. Use the MCP browser tools; do not run ad hoc shell scripts with `require('playwright')`.",
+      "- For frontend work, call `mobile-builder-open` with `wait=false` as soon as the UI project is known, continue other work while it starts, then call `mobile-builder-open(stateOnly=true, wait=true)` or a normal waited call before browser smoke or final proof.",
+      "- If `mobile-builder-open` returns `browserDebugUrl`, `browserDevToolsJsonUrl`, or `browserDevToolsWebSocketUrl`, attach the Playwright MCP browser tools to that visible Studio JxBrowser endpoint and verify the actual feature there.",
+      "- Studio JxBrowser exposes one visible viewer target over CDP. Do not create new browser tabs or pages; reuse the current target returned by Playwright/browser-control.",
+      "- In managed Codex sessions, browser automation is exposed through the Playwright MCP server configured in `codex-home/config.toml`. Use the MCP browser tools; do not run ad hoc shell scripts with `require('playwright')` or raw WebSocket CDP snippets.",
       "- Do not open `DisplayObjects/mobile/...` against the live HMR viewer.",
       "- In prod, the application URL is `.../DisplayObjects/mobile/home`.",
       "- If `mobile-builder-open` reports `compile_error`, treat that as a generator or source-object issue. Do not patch generated runtime sources.",
@@ -1163,6 +1321,39 @@
       var codexHome = new File(effectiveCodexHomePath(homePath));
       var skillFile = new File(new File(new File(codexHome, "skills"), skillSlug), "SKILL.md");
       var configFile = new File(codexHome, "config.toml");
+      if (profile === "generalist" && !boolValue(options.skipMcpProjectSkillSync || options.skipSetupCodexDelegate, false)) {
+        var delegated = setupCodexFromMcpProject(options, codexHome, report.resolvedMcpUrl);
+        if (delegated.attempted === true && delegated.ok === true) {
+          var delegatedConfig = readTextFile(configFile);
+          var delegatedPatch = patchCodexMcpConfigText(delegatedConfig, delegated.resolvedMcpUrl, options);
+          if (delegatedPatch.status !== "unchanged" && report.dryRun !== true) {
+            writeTextFile(configFile, delegatedPatch.text);
+          }
+          report.skillStatus = delegated.skillStatus;
+          report.configStatus = delegatedPatch.status !== "unchanged" ? delegatedPatch.status : delegated.configStatus;
+          report.resolvedCodexHome = delegated.resolvedCodexHome || filePath(codexHome);
+          report.resolvedMcpUrl = delegated.resolvedMcpUrl || report.resolvedMcpUrl;
+          report.target = report.resolvedCodexHome;
+          report.skillPath = delegated.skillPath || filePath(skillFile);
+          report.source = delegated.source;
+          report.warnings = report.warnings.concat(delegated.warnings || []);
+          if (report.skillStatus === "unchanged") {
+            report.reused.push("skills/" + skillSlug + "/SKILL.md");
+          } else {
+            report.generated.push("skills/" + skillSlug + "/SKILL.md");
+          }
+          if (report.configStatus === "unchanged") {
+            report.reused.push("config.toml");
+          } else {
+            report.generated.push("config.toml");
+          }
+          report.message = delegated.message;
+          return report;
+        }
+        if (delegated.attempted === true && delegated.message) {
+          report.warnings.push(delegated.message + (delegated.error ? ": " + delegated.error : ""));
+        }
+      }
       var skillSource = managedSkillContent(options, profile, report.resolvedMcpUrl);
       var skillWrite = writeManagedTextFile(skillFile, skillSource.content, report.dryRun);
       var existingConfig = readTextFile(configFile);
@@ -1301,6 +1492,36 @@
     report.copied.push(filename);
   }
 
+  function syncCodexUserFile(sourceDir, targetDir, filename, report) {
+    var source = new File(sourceDir, filename);
+    if (!source.isFile()) {
+      return;
+    }
+    var target = new File(targetDir, filename);
+    try {
+      if (filePath(source) === filePath(target)) {
+        report.reused.push(filename);
+        return;
+      }
+    } catch (_ignoreSameCodexFile) {}
+    if (target.exists()) {
+      try {
+        if (sha256File(source) === sha256File(target)) {
+          report.reused.push(filename);
+          return;
+        }
+      } catch (_ignoreCodexHash) {}
+      copyFileBinary(source, target);
+      if (!report.refreshed) {
+        report.refreshed = [];
+      }
+      report.refreshed.push(filename);
+      return;
+    }
+    copyFileBinary(source, target);
+    report.copied.push(filename);
+  }
+
   function bootstrapCodexHome(options, homePath, mcpEndpoint) {
     var report = {
       attempted: false,
@@ -1308,6 +1529,7 @@
       home: trim(homePath),
       copied: [],
       reused: [],
+      refreshed: [],
       generated: [],
       message: "",
       error: ""
@@ -1322,9 +1544,9 @@
       migrateLegacyHiddenCodexHome(homeDir, report);
       ensureDirectory(homeDir);
       var userCodex = new File(String(System.getProperty("user.home")), ".codex");
-      copyCodexUserFileIfMissing(userCodex, homeDir, "auth.json", report);
-      copyCodexUserFileIfMissing(userCodex, homeDir, "auth.json.api", report);
-      copyCodexUserFileIfMissing(userCodex, homeDir, "installation_id", report);
+      syncCodexUserFile(userCodex, homeDir, "auth.json", report);
+      syncCodexUserFile(userCodex, homeDir, "auth.json.api", report);
+      syncCodexUserFile(userCodex, homeDir, "installation_id", report);
       var configFile = new File(homeDir, "config.toml");
       if (appendCodexConvertigoMcpConfig(configFile, mcpEndpoint, options)) {
         report.generated.push("config.toml");
@@ -3024,6 +3246,11 @@
     if (trim(codexHomePath).length) {
       env.CODEX_HOME = trim(codexHomePath);
     }
+    var cdpEndpoint = resolvePlaywrightMcpCdpEndpoint(options);
+    if (cdpEndpoint.length) {
+      env.PLAYWRIGHT_MCP_CDP_ENDPOINT = cdpEndpoint;
+      env.PLAYWRIGHT_MCP_SHARED_BROWSER_CONTEXT = "1";
+    }
     var noCodeToken = noCodeMcpBearerToken(options);
     if (noCodeToken.length) {
       env[NOCODE_MCP_TOKEN_ENV] = noCodeToken;
@@ -3918,6 +4145,8 @@
       cwd: entry.cwd,
       command: entry.command,
       envKeys: entry.envKeys,
+      browserDebugUrl: entry.browserDebugUrl || "",
+      playwrightCdpEndpoint: entry.playwrightCdpEndpoint || entry.viewerCdpEndpoint || "",
       home: entry.home,
       credentials: {
         policy: entry.credentials.policy,

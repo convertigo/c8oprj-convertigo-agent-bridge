@@ -948,6 +948,21 @@
     var ttlMillis = intValue(options.ttlSeconds, DEFAULT_TTL_SECONDS, 30, 86400) * 1000;
     var credentials = codexCredentials(options, setup.setup.home);
     var entry = createEntry(handle, "codex", "codex-jsonl", [], cwd, env, ttlMillis, setup.setup.home, credentials, options.model || options.agentModel);
+    entry.agentProfile = trim(options.agentProfile || options.skillProfile || options.assistantContext || options.assistantSurface || options.profile);
+    entry.skillProfile = normalizeSkillProfile(options);
+    entry.assistantContext = trim(options.assistantContext);
+    entry.assistantSurface = trim(options.assistantSurface);
+    entry.userId = trim(options.userId);
+    entry.nocodeMcpTokenHandle = trim(options.nocodeMcpTokenHandle || options.noCodeMcpTokenHandle || options.mcpBearerTokenHandle);
+    entry.noCodeMcpTokenHandle = trim(options.noCodeMcpTokenHandle);
+    entry.mcpBearerTokenHandle = trim(options.mcpBearerTokenHandle);
+    entry.mcpEndpoint = resolveMcpEndpoint(options);
+    entry.browserDebugUrl = trim(options.browserDebugUrl);
+    entry.browserDevToolsJsonUrl = trim(options.browserDevToolsJsonUrl);
+    entry.browserDevToolsWebSocketUrl = trim(options.browserDevToolsWebSocketUrl);
+    entry.playwrightCdpEndpoint = resolvePlaywrightMcpCdpEndpoint(options);
+    entry.viewerCdpEndpoint = trim(options.viewerCdpEndpoint || entry.playwrightCdpEndpoint);
+    entry.playwrightMcpEndpoint = trim(options.playwrightMcpEndpoint);
     entry.reasoningEffort = normalizeCodexReasoningEffort(options.reasoningEffort || options.reasoningLevel || options.modelReasoningEffort);
     entry.serviceTier = trim(options.serviceTier || options.speedTier);
     entry.baseEnv = copyEnvObject(env);
@@ -1015,7 +1030,53 @@
     if (trim(options.serviceTier || options.speedTier).length) {
       entry.serviceTier = trim(options.serviceTier || options.speedTier);
     }
-    var env = mergeEnvObject(copyEnvObject(entry.baseEnv), parseObject(options.env, {}));
+    if (resolvePlaywrightMcpCdpEndpoint(options).length) {
+      entry.browserDebugUrl = trim(options.browserDebugUrl || entry.browserDebugUrl);
+      entry.browserDevToolsJsonUrl = trim(options.browserDevToolsJsonUrl || entry.browserDevToolsJsonUrl);
+      entry.browserDevToolsWebSocketUrl = trim(options.browserDevToolsWebSocketUrl || entry.browserDevToolsWebSocketUrl);
+      entry.playwrightCdpEndpoint = resolvePlaywrightMcpCdpEndpoint(options);
+      entry.viewerCdpEndpoint = trim(options.viewerCdpEndpoint || entry.playwrightCdpEndpoint || entry.viewerCdpEndpoint);
+      entry.playwrightMcpEndpoint = trim(options.playwrightMcpEndpoint || entry.playwrightMcpEndpoint);
+    }
+    var runtimeOptions = {};
+    for (var key in options) {
+      if (Object.prototype.hasOwnProperty.call(options, key)) {
+        runtimeOptions[key] = options[key];
+      }
+    }
+    runtimeOptions.agentProfile = trim(runtimeOptions.agentProfile || entry.agentProfile || entry.skillProfile);
+    runtimeOptions.skillProfile = trim(runtimeOptions.skillProfile || entry.skillProfile || entry.agentProfile);
+    runtimeOptions.assistantContext = trim(runtimeOptions.assistantContext || entry.assistantContext);
+    runtimeOptions.assistantSurface = trim(runtimeOptions.assistantSurface || entry.assistantSurface);
+    runtimeOptions.userId = trim(runtimeOptions.userId || entry.userId);
+    runtimeOptions.nocodeMcpTokenHandle = trim(runtimeOptions.nocodeMcpTokenHandle || entry.nocodeMcpTokenHandle || entry.noCodeMcpTokenHandle || entry.mcpBearerTokenHandle);
+    runtimeOptions.noCodeMcpTokenHandle = trim(runtimeOptions.noCodeMcpTokenHandle || entry.noCodeMcpTokenHandle);
+    runtimeOptions.mcpBearerTokenHandle = trim(runtimeOptions.mcpBearerTokenHandle || entry.mcpBearerTokenHandle);
+    runtimeOptions.mcpEndpoint = trim(runtimeOptions.mcpEndpoint || entry.mcpEndpoint);
+    runtimeOptions.browserDebugUrl = trim(runtimeOptions.browserDebugUrl || entry.browserDebugUrl);
+    runtimeOptions.browserDevToolsJsonUrl = trim(runtimeOptions.browserDevToolsJsonUrl || entry.browserDevToolsJsonUrl);
+    runtimeOptions.browserDevToolsWebSocketUrl = trim(runtimeOptions.browserDevToolsWebSocketUrl || entry.browserDevToolsWebSocketUrl);
+    runtimeOptions.playwrightCdpEndpoint = trim(runtimeOptions.playwrightCdpEndpoint || entry.playwrightCdpEndpoint || entry.viewerCdpEndpoint);
+    runtimeOptions.viewerCdpEndpoint = trim(runtimeOptions.viewerCdpEndpoint || entry.viewerCdpEndpoint || runtimeOptions.playwrightCdpEndpoint);
+    runtimeOptions.playwrightMcpEndpoint = trim(runtimeOptions.playwrightMcpEndpoint || entry.playwrightMcpEndpoint);
+    try {
+      if (entry.home && trim(entry.home.path).length) {
+        var bootstrap = bootstrapCodexHome(runtimeOptions, entry.home.path, resolveMcpEndpoint(runtimeOptions));
+        if (bootstrap && bootstrap.ok === false) {
+          pushEvent(entry, "warning", {
+            message: bootstrap.error || bootstrap.message || "Unable to refresh Codex home",
+            provider: "codex"
+          });
+        }
+      }
+    } catch (refreshError) {
+      pushEvent(entry, "warning", {
+        message: String(refreshError),
+        provider: "codex"
+      });
+    }
+    var env = mergeEnvObject(copyEnvObject(entry.baseEnv), codexRuntimeEnv(runtimeOptions, entry.home && entry.home.path ? entry.home.path : ""));
+    env = mergeEnvObject(env, parseObject(options.env, {}));
     if (entry.home && entry.home.path) {
       env.CODEX_HOME = entry.home.path;
     }
