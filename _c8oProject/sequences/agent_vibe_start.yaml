@@ -31,7 +31,8 @@ comment: Start a long-running vibe-acp process and create an ACP session.
       forcePythonInstall: typeof forcePythonInstall === "undefined" ? false : forcePythonInstall,
       env: typeof env === "undefined" ? "" : env,
       ttlSeconds: typeof ttlSeconds === "undefined" ? "" : ttlSeconds,
-      requestTimeoutMs: typeof requestTimeoutMs === "undefined" ? "" : requestTimeoutMs
+      requestTimeoutMs: typeof requestTimeoutMs === "undefined" ? "" : requestTimeoutMs,
+      agentRevealMode: typeof agentRevealMode === "undefined" ? "" : agentRevealMode
     });'
 ↓result [steps.JsonToXmlStep-1781600000202]: 
   jsonObject: 
@@ -76,6 +77,10 @@ comment: Start a long-running vibe-acp process and create an ACP session.
 ↓projectId [variables.RequestableVariable-1781600000212]: 
   comment: Optional project identifier included in user or conversation scoped homes.
   description: Optional project identifier included in user or conversation scoped homes.
+↓agentRevealMode [variables.RequestableVariable-1782955201201]: 
+  comment: Set true to tell the agent to pass reveal=true on supported Convertigo mutation/viewer tools.
+  description: Set true to tell the agent to pass reveal=true on supported Convertigo mutation/viewer tools.
+  value: false
 ↓credentialsPolicy [variables.RequestableVariable-1781600000213]: 
   comment: 'Credential injection policy: explicit, user-home, vibe-home, or auto. Defaults to explicit.'
   description: 'Credential injection policy: explicit, user-home, vibe-home, or auto. Defaults to explicit.'

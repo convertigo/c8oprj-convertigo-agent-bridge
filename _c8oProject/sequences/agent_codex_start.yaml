@@ -53,7 +53,8 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
       mcpBearerToken: typeof mcpBearerToken === "undefined" ? "" : mcpBearerToken,
       nocodeMcpTokenHandle: typeof nocodeMcpTokenHandle === "undefined" ? "" : nocodeMcpTokenHandle,
       noCodeMcpTokenHandle: typeof noCodeMcpTokenHandle === "undefined" ? "" : noCodeMcpTokenHandle,
-      mcpBearerTokenHandle: typeof mcpBearerTokenHandle === "undefined" ? "" : mcpBearerTokenHandle
+      mcpBearerTokenHandle: typeof mcpBearerTokenHandle === "undefined" ? "" : mcpBearerTokenHandle,
+      agentRevealMode: typeof agentRevealMode === "undefined" ? "" : agentRevealMode
     });'
 ↓result [steps.JsonToXmlStep-1781693000202]: 
   jsonObject: 
@@ -189,6 +190,10 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
 ↓mcpBearerTokenHandle [variables.RequestableVariable-1782509099981]: 
   comment: Server-side handle containing the MCP bearer token.
   description: Server-side handle containing the MCP bearer token.
+↓agentRevealMode [variables.RequestableVariable-1782955201001]: 
+  comment: Set true to tell the agent to pass reveal=true on supported Convertigo mutation/viewer tools.
+  description: Set true to tell the agent to pass reveal=true on supported Convertigo mutation/viewer tools.
+  value: false
 ↓playwrightPackage [variables.RequestableVariable-1782726369212]: 
   comment: Compatibility alias for playwrightMcpPackage. Defaults to @playwright/mcp.
   description: Compatibility alias for playwrightMcpPackage. Defaults to @playwright/mcp.

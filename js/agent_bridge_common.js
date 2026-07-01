@@ -9,7 +9,7 @@
   var MAX_EVENT_LIMIT = 500;
   var MAX_EVENT_BUFFER = 5000;
   var NOCODE_MCP_TOKEN_ENV = "C8O_NOCODE_MCP_TOKEN";
-  var MCP_GUIDANCE_VERSION = "2026-07-01.skill-sync-v2";
+  var MCP_GUIDANCE_VERSION = "2026-07-01.skill-sync-v3";
 
   var File = Packages.java.io.File;
   var FileOutputStream = Packages.java.io.FileOutputStream;
@@ -91,6 +91,7 @@
       "formId", "pageId", "applicationId", "currentPage", "currentApplicationId",
       "codexHomeScope", "vibeHomeScope", "homeScope", "codexHome", "vibeHome", "agentHome",
       "mcpEndpoint", "workspaceRoot", "settingsTimeoutMs", "modelsTimeoutMs",
+      "agentRevealMode", "convertigoRevealMode", "uiRevealMode", "revealMode",
       "nocodeMcpToken", "noCodeMcpToken", "mcpBearerToken",
       "nocodeMcpTokenHandle", "noCodeMcpTokenHandle", "mcpBearerTokenHandle",
       "browserDebugUrl", "browserDevToolsJsonUrl", "browserDevToolsWebSocketUrl",
@@ -115,6 +116,56 @@
     }
     var text = trim(value).toLowerCase();
     return text === "true" || text === "1" || text === "yes" || text === "on";
+  }
+
+  function revealModeEnabled(options, entry) {
+    options = options || {};
+    var values = [
+      options.agentRevealMode,
+      options.convertigoRevealMode,
+      options.uiRevealMode,
+      options.revealMode,
+      options.reveal
+    ];
+    for (var i = 0; i < values.length; i++) {
+      if (values[i] !== null && typeof values[i] !== "undefined" && trim(values[i]).length) {
+        return boolValue(values[i], false);
+      }
+    }
+    if (entry && entry.convertigoRevealMode === true) {
+      return true;
+    }
+    return false;
+  }
+
+  function firstDefinedOption(options, names) {
+    options = options || {};
+    for (var i = 0; i < names.length; i++) {
+      var value = options[names[i]];
+      if (value !== null && typeof value !== "undefined" && trim(value).length) {
+        return value;
+      }
+    }
+    return "";
+  }
+
+  function withRevealModePrompt(promptText, enabled) {
+    var text = String(promptText || "");
+    if (enabled !== true) {
+      return text;
+    }
+    var marker = "Convertigo runtime reveal mode is enabled";
+    if (text.indexOf(marker) !== -1) {
+      return text;
+    }
+    return [
+      marker + ".",
+      "When calling supported Convertigo MCP mutation/viewer tools that should visibly move Studio or No Code Studio, pass `reveal:true`: `databaseobject-tree-apply`, `mobile-builder-open`, `nocode-form-create`, `nocode-form-edit`, and `nocode-form-update`.",
+      "For `mobile-builder-open`, use `wait:false` for reveal/focus polls; reserve long `wait:true` calls for readiness proof and omit `reveal` unless the user specifically needs UI focus.",
+      "Do not pass `reveal:true` on read-only calls. Treat skipped, unsupported, or intent reveal results as UI hints, not mutation failures.",
+      "",
+      text
+    ].join("\n");
   }
 
   function intValue(value, defaultValue, minValue, maxValue) {
@@ -768,6 +819,8 @@
       "- When `mobile-builder-open` returns `browserDebugUrl`, `browserDevToolsJsonUrl`, or `browserDevToolsWebSocketUrl`, treat it as the visible Studio mobile viewer and prefer inspecting or driving that viewer over opening a separate browser.",
       "- Studio JxBrowser exposes one visible viewer target over CDP. Reuse the current browser-control target; do not create new tabs or pages for the mobile builder.",
       "- For viewer automation, use the Playwright MCP tools exposed by the managed Codex configuration. Do not run ad hoc shell scripts with `require('playwright')`, and do not launch a separate browser unless explicitly needed.",
+      "- If a prompt says Convertigo runtime reveal mode is enabled, pass `reveal:true` only on supported Convertigo mutation/viewer tools that should visibly move Studio or No Code Studio; do not add it to read-only calls.",
+      "- For `mobile-builder-open`, use `wait:false` for reveal/focus polls; reserve long `wait:true` calls for readiness proof and omit `reveal` unless the user specifically needs UI focus.",
       isNoCode ? "- You are in the C8Oforms / No-Code Studio surface, not in Eclipse Studio. A selected Convertigo project is optional in this surface." : "- Work on the selected project unless the user explicitly asks for another project.",
       isNoCode ? "- Discover forms, applications, pages, data sources, roles, publication state, and permissions through the NoCode/C8Oforms MCP context before falling back to generic Studio project inspection." : "",
       isNoCode ? "- If the current NoCode URL, form id, route, or page id is supplied in the prompt, treat it as the default target for edits unless the user names another target." : "",
@@ -1245,6 +1298,13 @@
       "- In prod, the application URL is `.../DisplayObjects/mobile/home`.",
       "- If `mobile-builder-open` reports `compile_error`, treat that as a generator or source-object issue. Do not patch generated runtime sources.",
       "",
+      "## Optional UI reveal mode",
+      "",
+      "- If the integrated assistant or host context says Convertigo reveal mode is enabled, pass `reveal:true` only on supported mutation/viewer tools that should visibly move Studio while you work: `databaseobject-tree-apply`, `mobile-builder-open`, `nocode-form-create`, `nocode-form-edit`, and `nocode-form-update`.",
+      "- Do not add `reveal:true` to every read-only call. Use it for object creation/patches, mobile builder opening/polling when focusing the builder is useful, and no-code form mutations that should switch the visible No Code editor.",
+      "- For `mobile-builder-open`, use `wait:false` for reveal/focus polls; reserve long `wait:true` calls for readiness proof and omit `reveal` unless the user specifically needs UI focus.",
+      "- Treat a `result.reveal.status` of `skipped`, `unsupported`, or `intent` as a UI hint result, not as a project mutation failure.",
+      "",
       "## MCP-only boundary",
       "",
       "- Never edit or repair `_private/ionic`, `DisplayObjects`, `dist`, or other generated artifacts.",
@@ -1299,6 +1359,12 @@
       "- Expected MCP endpoint: `" + trim(mcpEndpoint) + "`",
       "- Prefer MCP tools over filesystem edits for Convertigo objects.",
       "- Use the synchronized MCP knowledge pack in `skills/convertigo-mcp/` only for additional tool/resource details.",
+      "",
+      "## Optional UI reveal mode",
+      "",
+      "- If the integrated assistant or host context says Convertigo reveal mode is enabled, pass `reveal:true` only on supported no-code mutation tools that should visibly move No Code Studio while you work: `nocode-form-create`, `nocode-form-edit`, and `nocode-form-update`.",
+      "- Do not add `reveal:true` to read-only calls such as contract, compile, validate, catalog, or log tools.",
+      "- Treat a `result.reveal.status` of `skipped`, `unsupported`, or `intent` as a UI hint result, not as a no-code mutation failure.",
       "",
       "## Tool discovery fallback",
       "",
@@ -4172,6 +4238,7 @@
       cwd: entry.cwd,
       command: entry.command,
       envKeys: entry.envKeys,
+      convertigoRevealMode: entry.convertigoRevealMode === true,
       browserDebugUrl: entry.browserDebugUrl || "",
       playwrightCdpEndpoint: entry.playwrightCdpEndpoint || entry.viewerCdpEndpoint || "",
       home: entry.home,

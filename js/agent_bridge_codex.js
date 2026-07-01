@@ -900,6 +900,7 @@
       browserDevToolsWebSocketUrl: options.browserDevToolsWebSocketUrl,
       playwrightCdpEndpoint: options.playwrightCdpEndpoint || options.viewerCdpEndpoint,
       playwrightMcpEndpoint: options.playwrightMcpEndpoint,
+      agentRevealMode: firstDefinedOption(options, ["agentRevealMode", "convertigoRevealMode", "uiRevealMode", "revealMode", "reveal"]),
       mcpSkillsSourceDir: options.mcpSkillsSourceDir || options.skillsSourceDir || options.convertigoMcpDir,
       skipSkillsInstall: options.skipSkillsInstall || options.skipSkillSync,
       nocodeMcpTokenHandle: options.nocodeMcpTokenHandle || options.noCodeMcpTokenHandle || options.mcpBearerTokenHandle,
@@ -963,6 +964,7 @@
     entry.playwrightCdpEndpoint = resolvePlaywrightMcpCdpEndpoint(options);
     entry.viewerCdpEndpoint = trim(options.viewerCdpEndpoint || entry.playwrightCdpEndpoint);
     entry.playwrightMcpEndpoint = trim(options.playwrightMcpEndpoint);
+    entry.convertigoRevealMode = revealModeEnabled(options, null);
     entry.reasoningEffort = normalizeCodexReasoningEffort(options.reasoningEffort || options.reasoningLevel || options.modelReasoningEffort);
     entry.serviceTier = trim(options.serviceTier || options.speedTier);
     entry.baseEnv = copyEnvObject(env);
@@ -1038,6 +1040,7 @@
       entry.viewerCdpEndpoint = trim(options.viewerCdpEndpoint || entry.playwrightCdpEndpoint || entry.viewerCdpEndpoint);
       entry.playwrightMcpEndpoint = trim(options.playwrightMcpEndpoint || entry.playwrightMcpEndpoint);
     }
+    entry.convertigoRevealMode = revealModeEnabled(options, entry);
     var runtimeOptions = {};
     for (var key in options) {
       if (Object.prototype.hasOwnProperty.call(options, key)) {
@@ -1059,6 +1062,7 @@
     runtimeOptions.playwrightCdpEndpoint = trim(runtimeOptions.playwrightCdpEndpoint || entry.playwrightCdpEndpoint || entry.viewerCdpEndpoint);
     runtimeOptions.viewerCdpEndpoint = trim(runtimeOptions.viewerCdpEndpoint || entry.viewerCdpEndpoint || runtimeOptions.playwrightCdpEndpoint);
     runtimeOptions.playwrightMcpEndpoint = trim(runtimeOptions.playwrightMcpEndpoint || entry.playwrightMcpEndpoint);
+    runtimeOptions.agentRevealMode = entry.convertigoRevealMode === true ? "true" : "false";
     try {
       if (entry.home && trim(entry.home.path).length) {
         var bootstrap = bootstrapCodexHome(runtimeOptions, entry.home.path, resolveMcpEndpoint(runtimeOptions));
@@ -1088,6 +1092,7 @@
     entry.lastCodexProgressMessage = "";
     entry.lastCodexAnswerChunk = "";
     entry.codexTurnEnded = false;
+    promptText = withRevealModePrompt(promptText, entry.convertigoRevealMode === true);
     entry.command = codexCommand(entry.codexPath || "codex", entry, options, promptText);
     entry.envKeys = envKeys(env);
     pushEvent(entry, "turn/start", {

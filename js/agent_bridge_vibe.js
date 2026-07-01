@@ -225,6 +225,7 @@
     var ttlMillis = intValue(options.ttlSeconds, DEFAULT_TTL_SECONDS, 30, 86400) * 1000;
     var timeoutMs = intValue(options.requestTimeoutMs, 60000, 1000, 600000);
     var entry = createEntry(handle, "vibe", "acp", command, cwd, env, ttlMillis, setup.setup.home, credentials, setup.setup.model);
+    entry.convertigoRevealMode = revealModeEnabled(options, null);
     registry.put(handle, entry);
 
     try {
@@ -324,10 +325,12 @@
       return { ok: false, status: "not_running", handle: handle, state: statusOf(entry), timestamp: now() };
     }
 
+    entry.convertigoRevealMode = revealModeEnabled(options, entry);
     var promptText = String(options.prompt || "");
     if (!trim(promptText).length) {
       return { ok: false, status: "error", handle: handle, error: "prompt is required", timestamp: now() };
     }
+    promptText = withRevealModePrompt(promptText, entry.convertigoRevealMode === true);
     var messageId = trim(options.messageId);
     var params = {
       sessionId: entry.sessionId,
