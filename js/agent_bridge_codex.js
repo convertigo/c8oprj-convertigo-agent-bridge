@@ -338,6 +338,39 @@
     return true;
   }
 
+  function rememberCodexSession(entry, rawId, source) {
+    var id = trim(rawId);
+    if (!entry || !id.length) {
+      return false;
+    }
+    var currentSessionId = trim(entry.sessionId);
+    var currentThreadId = trim(entry.codexThreadId);
+    if (!currentSessionId.length || currentSessionId === id) {
+      entry.sessionId = id;
+      currentSessionId = id;
+    }
+    if (!currentThreadId.length || currentThreadId === id) {
+      entry.codexThreadId = id;
+      currentThreadId = id;
+    }
+    if (!currentSessionId.length && currentThreadId.length) {
+      entry.sessionId = currentThreadId;
+      currentSessionId = currentThreadId;
+    }
+    if (!currentThreadId.length && currentSessionId.length) {
+      entry.codexThreadId = currentSessionId;
+      currentThreadId = currentSessionId;
+    }
+    pushEvent(entry, "session/update", {
+      sessionId: currentSessionId,
+      threadId: currentThreadId,
+      reportedSessionId: id,
+      provider: "codex",
+      source: source || ""
+    });
+    return true;
+  }
+
   function handleCodexLine(entry, line, streamName) {
     var text = trim(line);
     if (!text.length) {
@@ -363,6 +396,11 @@
     }
 
     var type = String(message.type || "");
+    if (type === "session_meta") {
+      var metaPayload = message.payload || {};
+      rememberCodexSession(entry, metaPayload.id || metaPayload.session_id || metaPayload.sessionId || metaPayload.thread_id || metaPayload.threadId || message.id, "session_meta");
+      return;
+    }
     if (type === "event_msg" && handleCodexEventMessage(entry, message)) {
       return;
     }
@@ -370,13 +408,7 @@
       return;
     }
     if (type === "thread.started") {
-      entry.codexThreadId = String(message.thread_id || message.threadId || "");
-      entry.sessionId = entry.codexThreadId;
-      pushEvent(entry, "session/update", {
-        sessionId: entry.sessionId,
-        threadId: entry.codexThreadId,
-        provider: "codex"
-      });
+      rememberCodexSession(entry, message.thread_id || message.threadId, "thread.started");
       return;
     }
     if (type === "turn.started") {
@@ -832,7 +864,7 @@
       }
       command.push("--skip-git-repo-check");
       command.push(entry.sessionId);
-      command.push(promptText);
+      command.push("-");
       return command;
     }
 
@@ -859,7 +891,7 @@
     command.push("--skip-git-repo-check");
     command.push("-C");
     command.push(entry.cwd);
-    command.push(promptText);
+    command.push("-");
     return command;
   }
 
@@ -1109,6 +1141,9 @@
       startProcess(entry, env);
       try {
         if (entry.writer !== null) {
+          entry.writer.write(promptText);
+          entry.writer.newLine();
+          entry.writer.flush();
           entry.writer.close();
           entry.writer = null;
         }
