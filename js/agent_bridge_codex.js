@@ -104,6 +104,33 @@
     });
   }
 
+  function pushCodexRawChunk(entry, text, phase, source) {
+    text = String(text || "");
+    if (!trim(text).length) {
+      return;
+    }
+    pushEvent(entry, "answer/chunk", {
+      text: text,
+      phase: phase || "final_answer",
+      source: source || "codex",
+      provider: "codex"
+    });
+  }
+
+  function pushCodexProgressChunk(entry, text, phase, source) {
+    text = String(text || "");
+    if (!trim(text).length) {
+      return;
+    }
+    pushEvent(entry, "answer/chunk", {
+      text: text,
+      phase: "commentary",
+      progressPhase: phase || "commentary",
+      source: source || "codex",
+      provider: "codex"
+    });
+  }
+
   function codexAgentMessageLooksFinal(text, phase) {
     var p = String(phase || "").toLowerCase();
     if (p === "final_answer") {
@@ -715,6 +742,599 @@
       });
     }
   }
+
+  function codexRuntimeMode(options) {
+    var mode = trim(options.codexRuntimeMode || options.codexProtocol || options.runtimeMode || options.protocol).toLowerCase();
+    if (!mode.length || mode === "server" || mode === "stdio" || mode === "stdio://" || mode === "appserver" || mode === "app-server") {
+      return "app-server";
+    }
+    if (mode === "exec" || mode === "jsonl" || mode === "codex-jsonl") {
+      return "exec";
+    }
+    return mode;
+  }
+
+  function codexAppServerCommand(baseCommand, options) {
+    var command = parseCommand(options.appServerCommand || options.codexAppServerCommand, [baseCommand || "codex"]);
+    if (command.length === 1) {
+      command.push("app-server");
+      command.push("--listen");
+      command.push("stdio://");
+    }
+    return command;
+  }
+
+  function codexApprovalPolicy(options) {
+    var explicit = trim(options.approvalPolicy || options.askForApproval);
+    if (explicit.length) {
+      return explicit;
+    }
+    return boolValue(options.bypassApprovalsAndSandbox, true) ? "never" : "on-request";
+  }
+
+  function codexSandboxMode(options) {
+    var sandbox = trim(options.sandbox || options.sandboxMode);
+    if (sandbox.length) {
+      return sandbox;
+    }
+    return boolValue(options.bypassApprovalsAndSandbox, true) ? "danger-full-access" : "workspace-write";
+  }
+
+  function codexThreadParams(entry, options) {
+    var params = {
+      cwd: entry.cwd,
+      approvalPolicy: codexApprovalPolicy(options),
+      approvalsReviewer: "user",
+      sandbox: codexSandboxMode(options),
+      threadSource: "user"
+    };
+    if (trim(entry.model || options.model || options.agentModel).length) {
+      params.model = trim(entry.model || options.model || options.agentModel);
+    }
+    if (trim(entry.serviceTier || options.serviceTier || options.speedTier).length) {
+      params.serviceTier = trim(entry.serviceTier || options.serviceTier || options.speedTier);
+    }
+    return params;
+  }
+
+  function codexTurnParams(entry, options, promptText, requestId) {
+    var params = {
+      threadId: entry.codexThreadId || entry.sessionId,
+      clientUserMessageId: trim(options.messageId) || ("bridge-" + requestId),
+      input: [{
+        type: "text",
+        text: promptText,
+        text_elements: []
+      }],
+      cwd: entry.cwd,
+      approvalPolicy: codexApprovalPolicy(options)
+    };
+    if (trim(entry.model || options.model || options.agentModel).length) {
+      params.model = trim(entry.model || options.model || options.agentModel);
+    }
+    if (trim(entry.serviceTier || options.serviceTier || options.speedTier).length) {
+      params.serviceTier = trim(entry.serviceTier || options.serviceTier || options.speedTier);
+    }
+    if (trim(entry.reasoningEffort || options.reasoningEffort || options.reasoningLevel || options.modelReasoningEffort).length) {
+      params.effort = normalizeCodexReasoningEffort(entry.reasoningEffort || options.reasoningEffort || options.reasoningLevel || options.modelReasoningEffort);
+    }
+    return params;
+  }
+
+  function sendCodexAppServerRequest(entry, method, params) {
+    var id = entry.nextRequestId++;
+    var pending = {
+      id: id,
+      method: method,
+      startedAt: now(),
+      done: false,
+      response: null,
+      completedAt: 0
+    };
+    entry.pending.put(String(id), pending);
+    writeJson(entry, {
+      id: id,
+      method: method,
+      params: params || {}
+    });
+    pushEvent(entry, "codex/request", {
+      id: id,
+      method: method,
+      provider: "codex"
+    });
+    return pending;
+  }
+
+  function codexAppServerRequest(entry, method, params, timeoutMs) {
+    var pending = sendCodexAppServerRequest(entry, method, params);
+    return waitForPending(entry, pending, timeoutMs || 60000, true);
+  }
+
+  function codexAppServerThreadFromResponse(response) {
+    response = response || {};
+    return response.thread || (response.result && response.result.thread) || {};
+  }
+
+  function startCodexAppServer(entry, env, options, setup) {
+    var timeoutMs = intValue(options.requestTimeoutMs || options.appServerTimeoutMs, 60000, 1000, 180000);
+    entry.command = codexAppServerCommand(entry.codexPath || "codex", options);
+    entry.envKeys = envKeys(env);
+    startProcess(entry, env);
+    pushEvent(entry, "system/start", {
+      handle: entry.handle,
+      provider: "codex",
+      protocol: "codex-app-server",
+      command: entry.command,
+      cwd: entry.cwd,
+      codexHome: setup.setup.codexHome,
+      home: publicHomeInfo(setup.setup.home),
+      resumedThreadId: entry.codexThreadId,
+      mcp: setup.setup.mcp,
+      reasoningEffort: entry.reasoningEffort,
+      serviceTier: entry.serviceTier
+    });
+
+    entry.phase = "initialize";
+    entry.init = codexAppServerRequest(entry, "initialize", {
+      clientInfo: {
+        name: "ConvertigoAgentBridge",
+        version: "0.1.0"
+      },
+      capabilities: null
+    }, timeoutMs);
+    writeJson(entry, { method: "initialized" });
+
+    var threadResponse;
+    if (entry.sessionId.length || entry.codexThreadId.length) {
+      entry.phase = "thread/resume";
+      var resumeParams = codexThreadParams(entry, options);
+      resumeParams.threadId = entry.sessionId || entry.codexThreadId;
+      threadResponse = codexAppServerRequest(entry, "thread/resume", resumeParams, timeoutMs);
+    } else {
+      entry.phase = "thread/start";
+      threadResponse = codexAppServerRequest(entry, "thread/start", codexThreadParams(entry, options), timeoutMs);
+    }
+
+    var thread = codexAppServerThreadFromResponse(threadResponse);
+    rememberCodexSession(entry, thread.id || thread.threadId || entry.sessionId || entry.codexThreadId, "app-server");
+    entry.phase = "ready";
+    entry.status = "running";
+    entry.session = threadResponse;
+    rememberSessionHandle(entry.handle);
+  }
+
+  function codexAppServerItemTitle(item) {
+    item = item || {};
+    if (item.type === "commandExecution") {
+      return item.command || "command";
+    }
+    if (item.type === "mcpToolCall") {
+      return trim(item.server).length || trim(item.tool).length ? trim(item.server) + "." + trim(item.tool) : "mcp tool";
+    }
+    if (item.type === "dynamicToolCall") {
+      return trim(item.namespace).length ? trim(item.namespace) + "." + trim(item.tool) : trim(item.tool) || "tool";
+    }
+    if (item.type === "fileChange") {
+      return "file change";
+    }
+    if (item.type === "webSearch") {
+      return "web search";
+    }
+    return item.type || "item";
+  }
+
+  function codexAppServerToolStatus(item, completed) {
+    if (completed) {
+      return "completed";
+    }
+    var status = trim(item && item.status);
+    return status.length ? status : "running";
+  }
+
+  function codexAppServerToolDetail(item) {
+    item = item || {};
+    return codexToolPreview(item.aggregatedOutput || item.result || item.error || item.arguments || item.changes || item.query || "");
+  }
+
+  function codexAppServerDeltaPhase(entry, itemId) {
+    var item = entry && entry.codexAppServerItems ? entry.codexAppServerItems[itemId] : null;
+    return String((item && item.phase) || "").toLowerCase();
+  }
+
+  function codexAppServerShouldFlushText(text) {
+    var value = String(text || "");
+    if (!trim(value).length) {
+      return false;
+    }
+    if (/[\r\n]/.test(value)) {
+      return true;
+    }
+    if (/[.!?;:]\s*$/.test(value) && trim(value).length >= 24) {
+      return true;
+    }
+    return value.length >= 140 && /\s$/.test(value);
+  }
+
+  function codexAppServerAppendStoredDelta(entry, itemId, delta) {
+    itemId = String(itemId || "");
+    delta = String(delta || "");
+    if (!delta.length) {
+      return;
+    }
+    if (!entry.codexAppServerDeltaText) {
+      entry.codexAppServerDeltaText = {};
+    }
+    entry.codexAppServerDeltaText[itemId] = String(entry.codexAppServerDeltaText[itemId] || "") + delta;
+  }
+
+  function codexAppServerAppendDelta(entry, itemId, delta) {
+    itemId = String(itemId || "");
+    delta = String(delta || "");
+    if (!delta.length) {
+      return;
+    }
+    codexAppServerAppendStoredDelta(entry, itemId, delta);
+    if (!entry.codexAppServerDeltaPending) {
+      entry.codexAppServerDeltaPending = {};
+    }
+    entry.codexAppServerDeltaPending[itemId] = String(entry.codexAppServerDeltaPending[itemId] || "") + delta;
+  }
+
+  function codexAppServerAppendReasoningSummary(entry, itemId, delta) {
+    itemId = String(itemId || "");
+    delta = String(delta || "");
+    if (!delta.length) {
+      return;
+    }
+    codexAppServerAppendStoredDelta(entry, itemId, delta);
+    if (!entry.codexAppServerReasoningSummaryPending) {
+      entry.codexAppServerReasoningSummaryPending = {};
+    }
+    entry.codexAppServerReasoningSummaryPending[itemId] = String(entry.codexAppServerReasoningSummaryPending[itemId] || "") + delta;
+  }
+
+  function codexAppServerFlushPendingAgentMessage(entry, itemId, phase, force) {
+    itemId = String(itemId || "");
+    if (!entry.codexAppServerDeltaPending) {
+      return false;
+    }
+    var pending = String(entry.codexAppServerDeltaPending[itemId] || "");
+    if (!trim(pending).length) {
+      return false;
+    }
+    if (force !== true && !codexAppServerShouldFlushText(pending)) {
+      return false;
+    }
+    entry.codexAppServerDeltaPending[itemId] = "";
+    if (!entry.codexAppServerStreamedItems) {
+      entry.codexAppServerStreamedItems = {};
+    }
+    entry.codexAppServerStreamedItems[itemId] = true;
+    if (String(phase || "").toLowerCase() === "final_answer") {
+      pushCodexRawChunk(entry, pending, "final_answer", "app-server-delta");
+      pushCodexProgress(entry, pending, "final_answer", "app-server-delta");
+    } else {
+      pushCodexProgressChunk(entry, pending, phase || "commentary", "app-server-delta");
+    }
+    return true;
+  }
+
+  function codexAppServerFlushReasoningSummary(entry, itemId, force) {
+    itemId = String(itemId || "");
+    if (!entry.codexAppServerReasoningSummaryPending) {
+      return false;
+    }
+    var pending = String(entry.codexAppServerReasoningSummaryPending[itemId] || "");
+    if (!trim(pending).length) {
+      return false;
+    }
+    if (force !== true && !codexAppServerShouldFlushText(pending)) {
+      return false;
+    }
+    entry.codexAppServerReasoningSummaryPending[itemId] = "";
+    pushCodexProgressChunk(entry, pending, "reasoning_summary", "app-server-delta");
+    return true;
+  }
+
+  function codexAppServerHandleItem(entry, item, completed) {
+    item = item || {};
+    var type = String(item.type || "");
+    if (!entry.codexAppServerItems) {
+      entry.codexAppServerItems = {};
+    }
+    if (!entry.codexAppServerCompletedItems) {
+      entry.codexAppServerCompletedItems = {};
+    }
+    if (item.id) {
+      entry.codexAppServerItems[item.id] = item;
+      if (completed && entry.codexAppServerCompletedItems[item.id] === true) {
+        return true;
+      }
+    }
+    if (type === "agentMessage") {
+      if (!completed && item.id) {
+        var runningPhase = String(item.phase || "").toLowerCase();
+        if (runningPhase === "final_answer") {
+          codexAppServerFlushPendingAgentMessage(entry, item.id, "final_answer", true);
+        } else if (runningPhase === "commentary") {
+          codexAppServerFlushPendingAgentMessage(entry, item.id, "commentary", false);
+        }
+        return true;
+      }
+      if (completed && item.id && entry.codexAppServerStreamedItems && entry.codexAppServerStreamedItems[item.id] === true) {
+        codexAppServerFlushPendingAgentMessage(entry, item.id, item.phase, true);
+        entry.codexAppServerCompletedItems[item.id] = true;
+        return true;
+      }
+      var messageText = item.text || "";
+      if (!trim(messageText).length && item.id && entry.codexAppServerDeltaText) {
+        messageText = entry.codexAppServerDeltaText[item.id] || "";
+      }
+      if (completed && trim(messageText).length) {
+        if (String(item.phase || "") === "commentary") {
+          pushCodexProgress(entry, messageText, item.phase, "app-server-item");
+        } else {
+          pushCodexAnswer(entry, messageText, "app-server-item");
+        }
+      }
+      if (completed && item.id) {
+        entry.codexAppServerCompletedItems[item.id] = true;
+      }
+      return true;
+    }
+    if (type === "plan") {
+      var planText = item.text || "";
+      if (!trim(planText).length && item.id && entry.codexAppServerDeltaText) {
+        planText = entry.codexAppServerDeltaText[item.id] || "";
+      }
+      if (trim(planText).length) {
+        pushEvent(entry, "plan/update", {
+          text: planText,
+          item: item,
+          provider: "codex"
+        });
+      }
+      if (completed && item.id) {
+        entry.codexAppServerCompletedItems[item.id] = true;
+      }
+      return true;
+    }
+    if (type === "reasoning") {
+      if (completed && item.id) {
+        codexAppServerFlushReasoningSummary(entry, item.id, true);
+      }
+      var text = "";
+      if (item.summary && item.summary.length) {
+        text = item.summary.join("\n");
+      } else if (item.content && item.content.length) {
+        text = item.content.join("\n");
+      } else if (item.id && entry.codexAppServerDeltaText) {
+        text = entry.codexAppServerDeltaText[item.id] || "";
+      }
+      if (trim(text).length) {
+        pushEvent(entry, "reasoning/chunk", {
+          text: text,
+          item: item,
+          provider: "codex"
+        });
+      }
+      if (completed && item.id) {
+        entry.codexAppServerCompletedItems[item.id] = true;
+      }
+      return true;
+    }
+    if (type === "commandExecution" || type === "mcpToolCall" || type === "dynamicToolCall" || type === "fileChange" || type === "webSearch") {
+      pushEvent(entry, completed ? "tool/update" : "tool/start", {
+        title: codexAppServerItemTitle(item),
+        toolName: item.tool || item.command || type,
+        status: codexAppServerToolStatus(item, completed),
+        callId: item.id || "",
+        item: item,
+        detail: codexAppServerToolDetail(item),
+        provider: "codex"
+      });
+      if (completed && item.id) {
+        entry.codexAppServerCompletedItems[item.id] = true;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  function handleCodexAppServerRequest(entry, message) {
+    var method = String(message.method || "");
+    var params = message.params || {};
+    pushEvent(entry, "codex/request_from_server", {
+      id: message.id || null,
+      method: method,
+      params: params,
+      provider: "codex"
+    });
+    if (method === "item/commandExecution/requestApproval") {
+      sendJsonResponse(entry, message.id, { decision: "accept" });
+      return true;
+    }
+    if (method === "item/fileChange/requestApproval") {
+      sendJsonResponse(entry, message.id, { decision: "accept" });
+      return true;
+    }
+    if (method === "item/permissions/requestApproval") {
+      sendJsonResponse(entry, message.id, {
+        permissions: params.permissions || {},
+        scope: "session"
+      });
+      return true;
+    }
+    sendJsonError(entry, message.id, -32601, "Unsupported Codex app-server request: " + method);
+    return true;
+  }
+
+  function handleCodexAppServerLine(entry, line, streamName) {
+    var text = trim(line);
+    if (!text.length) {
+      return;
+    }
+    if (streamName !== "stdout") {
+      if (streamName === "stderr") {
+        entry.lastError = text;
+      }
+      pushEvent(entry, streamName, { line: text, provider: "codex" });
+      return;
+    }
+
+    var message;
+    try {
+      message = JSON.parse(text);
+    } catch (_ignoreCodexAppServerJson) {
+      pushEvent(entry, "diagnostic", { line: text, provider: "codex" });
+      return;
+    }
+
+    if (typeof message.id !== "undefined" && (typeof message.result !== "undefined" || typeof message.error !== "undefined")) {
+      var pending = entry.pending.get(String(message.id));
+      if (pending !== null && typeof pending !== "undefined") {
+        pending.response = message;
+        pending.done = true;
+        pending.completedAt = now();
+        if (message.error) {
+          entry.lastError = JSON.stringify(message.error);
+          pushEvent(entry, "turn/error", {
+            requestId: message.id,
+            method: pending.method,
+            error: message.error,
+            provider: "codex"
+          });
+        } else if (pending.method === "turn/start") {
+          var turn = (message.result && message.result.turn) || {};
+          entry.activeTurnId = turn.id || entry.activeTurnId || "";
+        }
+      }
+      pushEvent(entry, message.error ? "codex/response_error" : "codex/response", {
+        id: message.id,
+        method: pending ? pending.method : "",
+        response: message,
+        provider: "codex"
+      });
+      return;
+    }
+
+    var method = String(message.method || "");
+    var params = message.params || {};
+    if (!method.length) {
+      pushEvent(entry, "codex/event", { event: message, provider: "codex" });
+      return;
+    }
+    if (typeof message.id !== "undefined") {
+      handleCodexAppServerRequest(entry, message);
+      return;
+    }
+    if (method === "thread/started") {
+      var thread = params.thread || {};
+      rememberCodexSession(entry, params.threadId || thread.id || thread.threadId, "thread/started");
+      return;
+    }
+    if (method === "thread/status/changed") {
+      pushEvent(entry, "codex/thread_status", {
+        threadId: params.threadId || entry.codexThreadId,
+        status: params.status || {},
+        provider: "codex"
+      });
+      return;
+    }
+    if (method === "thread/closed") {
+      pushEvent(entry, "codex/thread_closed", {
+        threadId: params.threadId || entry.codexThreadId,
+        provider: "codex"
+      });
+      return;
+    }
+    if (method === "turn/started") {
+      var startedTurn = params.turn || {};
+      entry.activeTurnId = startedTurn.id || entry.activeTurnId || "";
+      entry.status = "running";
+      entry.phase = "turn";
+      pushEvent(entry, "turn/start", {
+        provider: "codex",
+        threadId: params.threadId || entry.codexThreadId,
+        turnId: entry.activeTurnId,
+        turn: startedTurn
+      });
+      return;
+    }
+    if (method === "turn/completed") {
+      var completedTurn = params.turn || {};
+      entry.activeTurnId = completedTurn.id || entry.activeTurnId || "";
+      if (completedTurn.items && completedTurn.items.length) {
+        for (var i = 0; i < completedTurn.items.length; i++) {
+          codexAppServerHandleItem(entry, completedTurn.items[i], true);
+        }
+      }
+      pushCodexTurnEnd(entry, {
+        result: params,
+        provider: "codex",
+        threadId: params.threadId || entry.codexThreadId,
+        turnId: entry.activeTurnId
+      });
+      return;
+    }
+    if (method === "item/agentMessage/delta") {
+      if (!entry.codexAppServerItemDeltas) {
+        entry.codexAppServerItemDeltas = {};
+      }
+      entry.codexAppServerItemDeltas[params.itemId || ""] = true;
+      var deltaItemId = params.itemId || "";
+      var deltaPhase = codexAppServerDeltaPhase(entry, deltaItemId);
+      codexAppServerAppendDelta(entry, deltaItemId, params.delta || "");
+      if (deltaPhase === "final_answer") {
+        codexAppServerFlushPendingAgentMessage(entry, deltaItemId, "final_answer", false);
+      } else if (deltaPhase === "commentary") {
+        codexAppServerFlushPendingAgentMessage(entry, deltaItemId, "commentary", false);
+      }
+      return;
+    }
+    if (method === "item/plan/delta") {
+      codexAppServerAppendDelta(entry, params.itemId || "", params.delta || "");
+      return;
+    }
+    if (method === "item/reasoning/textDelta" || method === "item/reasoning/summaryTextDelta") {
+      var reasoningItemId = params.itemId || "";
+      if (method === "item/reasoning/textDelta") {
+        codexAppServerAppendStoredDelta(entry, reasoningItemId, params.delta || "");
+      } else {
+        codexAppServerAppendReasoningSummary(entry, reasoningItemId, params.delta || "");
+      }
+      if (method === "item/reasoning/summaryTextDelta") {
+        codexAppServerFlushReasoningSummary(entry, reasoningItemId, false);
+      }
+      return;
+    }
+    if (method === "item/started" || method === "item/completed") {
+      if (!codexAppServerHandleItem(entry, params.item || {}, method === "item/completed")) {
+        pushEvent(entry, "codex/item", {
+          method: method,
+          params: params,
+          provider: "codex"
+        });
+      }
+      return;
+    }
+    if (method === "error") {
+      entry.status = "error";
+      entry.phase = "error";
+      entry.lastError = JSON.stringify(params);
+      pushEvent(entry, "turn/error", {
+        error: params,
+        provider: "codex"
+      });
+      return;
+    }
+    pushEvent(entry, "codex/event", {
+      method: method,
+      params: params,
+      provider: "codex"
+    });
+  }
+
   C8O.agentBridge.codexSetup = function (options) {
     options = optionsWithRequestFallbacks(options || {});
     var install = boolValue(options.install || options.installCodex, false);
@@ -897,6 +1517,21 @@
 
   C8O.agentBridge.codexStart = function (options) {
     options = optionsWithRequestFallbacks(options || {});
+    var handle = trim(options.handle) || makeHandle("codex");
+    var registry = getRegistry();
+    var existing = registry.get(handle);
+    if (existing !== null && typeof existing !== "undefined" && processAlive(existing.process)) {
+      writeEntryPidFile(existing);
+      rememberSessionHandle(handle);
+      return {
+        ok: true,
+        status: "already_running",
+        handle: handle,
+        state: statusOf(existing),
+        timestamp: now()
+      };
+    }
+
     var setup = C8O.agentBridge.codexSetup({
       workspaceRoot: options.workspaceRoot,
       installDir: options.installDir,
@@ -950,20 +1585,6 @@
       };
     }
 
-    var handle = trim(options.handle) || makeHandle("codex");
-    var registry = getRegistry();
-    var existing = registry.get(handle);
-    if (existing !== null && typeof existing !== "undefined" && processAlive(existing.process)) {
-      rememberSessionHandle(handle);
-      return {
-        ok: true,
-        status: "already_running",
-        handle: handle,
-        state: statusOf(existing),
-        timestamp: now()
-      };
-    }
-
     var env = parseObject(options.env, {});
     if (setup.setup.codexHome.length) {
       env.CODEX_HOME = setup.setup.codexHome;
@@ -979,8 +1600,24 @@
     env.TERM = env.TERM || "xterm-256color";
     var cwd = normalizeDirectory(options.cwd, setup.setup.workspaceRoot, setup.setup.workspaceRoot);
     var ttlMillis = intValue(options.ttlSeconds, DEFAULT_TTL_SECONDS, 30, 86400) * 1000;
+    var orphanSweep = sweepCodexAppServerPidFiles(setup.setup.workspaceRoot, ttlMillis);
     var credentials = codexCredentials(options, setup.setup.home);
-    var entry = createEntry(handle, "codex", "codex-jsonl", [], cwd, env, ttlMillis, setup.setup.home, credentials, options.model || options.agentModel);
+    var runtimeMode = codexRuntimeMode(options);
+    if (runtimeMode !== "app-server" && runtimeMode !== "exec") {
+      return {
+        ok: false,
+        status: "error",
+        phase: "codex_start",
+        error: "Unsupported Codex runtime mode: " + runtimeMode,
+        setup: setup,
+        timestamp: now()
+      };
+    }
+    var protocol = runtimeMode === "exec" ? "codex-jsonl" : "codex-app-server";
+    var entry = createEntry(handle, "codex", protocol, [], cwd, env, ttlMillis, setup.setup.home, credentials, options.model || options.agentModel);
+    entry.workspaceRoot = setup.setup.workspaceRoot;
+    var pidFile = protocol === "codex-app-server" ? codexPidFile(setup.setup.workspaceRoot, handle) : null;
+    entry.pidFile = pidFile === null ? "" : filePath(pidFile);
     entry.agentProfile = trim(options.agentProfile || options.skillProfile || options.assistantContext || options.assistantSurface || options.profile);
     entry.skillProfile = normalizeSkillProfile(options);
     entry.assistantContext = trim(options.assistantContext);
@@ -1000,25 +1637,58 @@
     entry.reasoningEffort = normalizeCodexReasoningEffort(options.reasoningEffort || options.reasoningLevel || options.modelReasoningEffort);
     entry.serviceTier = trim(options.serviceTier || options.speedTier);
     entry.baseEnv = copyEnvObject(env);
+    entry.codexRuntimeMode = runtimeMode;
     entry.status = "ready";
     entry.phase = "ready";
     entry.sessionId = trim(options.codexThreadId || options.sessionId || options.externalSessionId);
     entry.codexThreadId = entry.sessionId;
     entry.codexPath = setup.setup.codex.path || "codex";
     registry.put(handle, entry);
-    rememberSessionHandle(handle);
-    pushEvent(entry, "system/start", {
-      handle: handle,
-      provider: "codex",
-      protocol: "codex-jsonl",
-      cwd: cwd,
-      codexHome: setup.setup.codexHome,
-      home: publicHomeInfo(setup.setup.home),
-      resumedThreadId: entry.codexThreadId,
-      mcp: setup.setup.mcp,
-      reasoningEffort: entry.reasoningEffort,
-      serviceTier: entry.serviceTier
-    });
+    if (runtimeMode !== "exec") {
+      try {
+        startCodexAppServer(entry, env, options, setup);
+      } catch (appServerError) {
+        entry.status = "error";
+        entry.phase = "error";
+        entry.lastError = String(appServerError);
+        pushEvent(entry, "error", {
+          message: String(appServerError),
+          phase: "codex_app_server_start",
+          provider: "codex"
+        });
+        stopEntry(entry, false);
+        return {
+          ok: false,
+          status: "error",
+          phase: "codex_app_server_start",
+          error: String(appServerError),
+          handle: handle,
+          state: statusOf(entry),
+          setup: setup,
+          timestamp: now()
+        };
+      }
+    } else {
+      rememberSessionHandle(handle);
+      pushEvent(entry, "system/start", {
+        handle: handle,
+        provider: "codex",
+        protocol: "codex-jsonl",
+        cwd: cwd,
+        codexHome: setup.setup.codexHome,
+        home: publicHomeInfo(setup.setup.home),
+        resumedThreadId: entry.codexThreadId,
+        mcp: setup.setup.mcp,
+        reasoningEffort: entry.reasoningEffort,
+        serviceTier: entry.serviceTier
+      });
+    }
+    if (orphanSweep.stopped.length) {
+      pushEvent(entry, "system/sweep", {
+        provider: "codex",
+        stopped: orphanSweep.stopped
+      });
+    }
 
     return {
       ok: true,
@@ -1026,6 +1696,7 @@
       handle: handle,
       sessionId: entry.sessionId,
       codexThreadId: entry.codexThreadId,
+      codexRuntimeMode: entry.codexRuntimeMode,
       cursor: entry.nextIndex,
       state: statusOf(entry),
       setup: setup,
@@ -1043,7 +1714,11 @@
     if (entry === null || typeof entry === "undefined") {
       return { ok: false, status: "not_found", handle: handle, error: "Unknown handle", timestamp: now() };
     }
-    if (processAlive(entry.process)) {
+    if (entry.protocol === "codex-app-server") {
+      if (!processAlive(entry.process)) {
+        return { ok: false, status: "not_running", handle: handle, state: statusOf(entry), timestamp: now() };
+      }
+    } else if (processAlive(entry.process)) {
       return { ok: false, status: "busy", handle: handle, state: statusOf(entry), timestamp: now() };
     }
 
@@ -1110,6 +1785,62 @@
         message: String(refreshError),
         provider: "codex"
       });
+    }
+    if (entry.protocol === "codex-app-server") {
+      var appServerRequestId = entry.nextRequestId;
+      var appServerCursor = entry.nextIndex;
+      entry.status = "running";
+      entry.phase = "turn";
+      entry.lastCodexProgressMessage = "";
+      entry.lastCodexAnswerChunk = "";
+      entry.codexTurnEnded = false;
+      entry.codexAppServerItems = {};
+      entry.codexAppServerCompletedItems = {};
+      entry.codexAppServerDeltaText = {};
+      entry.codexAppServerDeltaPending = {};
+      entry.codexAppServerReasoningSummaryPending = {};
+      entry.codexAppServerStreamedItems = {};
+      entry.codexAppServerItemDeltas = {};
+      promptText = withRevealModePrompt(promptText, entry.convertigoRevealMode === true);
+      if (!trim(entry.codexThreadId || entry.sessionId).length) {
+        return { ok: false, status: "error", handle: handle, error: "Codex app-server thread id is missing", state: statusOf(entry), timestamp: now() };
+      }
+      try {
+        var turnPending = sendCodexAppServerRequest(entry, "turn/start", codexTurnParams(entry, options, promptText, appServerRequestId));
+        pushEvent(entry, "turn/start", {
+          requestId: turnPending.id,
+          provider: "codex",
+          textLength: promptText.length,
+          threadId: entry.codexThreadId,
+          reasoningEffort: entry.reasoningEffort,
+          serviceTier: entry.serviceTier
+        });
+        return {
+          ok: true,
+          status: "submitted",
+          handle: handle,
+          requestId: turnPending.id,
+          cursor: appServerCursor,
+          state: statusOf(entry),
+          timestamp: now()
+        };
+      } catch (appServerPromptError) {
+        entry.status = "error";
+        entry.phase = "error";
+        entry.lastError = String(appServerPromptError);
+        pushEvent(entry, "turn/error", {
+          message: String(appServerPromptError),
+          provider: "codex"
+        });
+        return {
+          ok: false,
+          status: "error",
+          handle: handle,
+          error: String(appServerPromptError),
+          state: statusOf(entry),
+          timestamp: now()
+        };
+      }
     }
     var env = mergeEnvObject(copyEnvObject(entry.baseEnv), codexRuntimeEnv(runtimeOptions, entry.home && entry.home.path ? entry.home.path : ""));
     env = mergeEnvObject(env, parseObject(options.env, {}));

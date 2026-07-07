@@ -143,6 +143,29 @@ Arreter :
 }
 ```
 
+## Codex resident
+
+Le bridge utilise maintenant Codex en mode resident par defaut, via :
+
+```text
+codex app-server --listen stdio://
+```
+
+`agent_codex_start` lance ce process, initialise le protocole JSON-RPC
+app-server, puis cree ou reprend un thread Codex. `agent_codex_prompt` n'appelle
+plus `codex exec` en mode par defaut ; il envoie un `turn/start` au process
+stdio deja vivant.
+
+`agent_codex_start` est idempotent pour un handle vivant. Si le handle existe
+encore dans le registry serveur et que son process est vivant, la sequence
+retourne `status: "already_running"` et reutilise le meme app-server. Cette
+propriete permet a l'Assistant de prechauffer Codex quand l'utilisateur reprend
+une conversation, avant le premier prompt.
+
+Le mode historique reste disponible en fallback avec `codexRuntimeMode=exec`.
+Dans ce cas, chaque prompt repasse par `codex exec --json` ou
+`codex exec resume --json`.
+
 ## Semantique des evenements
 
 Chaque evenement contient :
@@ -186,6 +209,18 @@ Un handle courant est aussi stocke dans la session HTTP avec
 `agent_vibe_prompt` et `agent_events` sans repasser explicitement le handle tant
 que la session HTTP reste la meme.
 
+Pour Codex app-server, le bridge ecrit en plus un fichier PID par handle sous :
+
+```text
+<workspaceRoot>/agents/codex/app-server-pids/<handle>.json
+```
+
+Ce fichier contient le PID du wrapper Node, la commande, le workspace root, le
+handle et le TTL. Il sert uniquement au nettoyage des process orphelins quand le
+registry `context.server` a ete perdu, par exemple apres un reload projet ou un
+redemarrage partiel. Les PID files ne remplacent pas le registry memoire pour le
+flux normal.
+
 ## Isolation et credentials
 
 Le `VIBE_HOME` est resolu avant le demarrage du process :
@@ -213,6 +248,11 @@ Le status retourne les noms de variables disponibles, jamais leurs valeurs.
 `agent_sweep_expired` ferme les process dont l'inactivite depasse leur TTL, ou
 le seuil `maxIdleSeconds` fourni a l'appel. Cette sequence est faite pour etre
 appelee plus tard par un scheduler Convertigo.
+
+Au demarrage Codex, `agent_codex_start` balaie aussi les PID files Codex et
+ferme les app-servers orphelins expires. Un process est conserve si son PID est
+encore reference par une entree vivante du registry. Quand un handle est ferme
+normalement avec `agent_codex_close`, le PID file correspondant est supprime.
 
 Les runtimes Python ne sont pas supprimes par `agent_sweep_expired`. Ils sont
 des outils partages du workspace, comme le cache Node.js du moteur.

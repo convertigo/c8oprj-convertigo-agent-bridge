@@ -20,12 +20,18 @@ Il expose les sequences publiques suivantes :
 
 - `agent_python_setup` : verifie ou installe un runtime Python local au
   workspace Convertigo.
+- `agent_codex_setup` : verifie ou installe le runtime Codex local.
+- `agent_codex_start` : lance ou reutilise un `codex app-server` resident en
+  stdio et cree ou reprend un thread Codex.
+- `agent_codex_prompt` : envoie un prompt au thread Codex resident.
+- `agent_codex_close` : ferme le handle Codex et arrete son app-server.
 - `agent_vibe_setup` : verifie ou installe le runtime Vibe local.
 - `agent_vibe_start` : lance `vibe-acp`, fait `initialize`, puis cree une
   session ACP.
 - `agent_vibe_prompt` : envoie un prompt a la session ACP.
 - `agent_events` : lit les evenements normalises par long-poll HTTP.
-- `agent_status` : retourne les process vivants en memoire serveur.
+- `agent_status` : retourne les process vivants en memoire serveur, avec le PID
+  quand le runtime l'expose.
 - `agent_vibe_close` : ferme la session et arrete le process.
 - `agent_sweep_expired` : nettoie les process abandonnes.
 
@@ -33,6 +39,19 @@ Les process sont gardes en memoire serveur via `context.server.set/get`. Le
 handle courant est memorise dans la session HTTP pour permettre au chatbot de
 continuer a appeler `agent_events` ou `agent_vibe_prompt` sans repasser le
 handle a chaque requete.
+
+Codex utilise `codex app-server --listen stdio://` par defaut. Le handle est
+resident et `agent_codex_start` est idempotent : si le process existe deja, la
+sequence retourne `already_running` au lieu de relancer Codex. Cela permet au
+projet Assistant de prechauffer le serveur quand l'utilisateur reprend une
+conversation.
+
+Les app-servers Codex ont aussi un fichier PID sous
+`<workspace>/agents/codex/app-server-pids/<handle>.json`. Ce fichier permet de
+nettoyer les process orphelins lorsque le registry memoire Convertigo est perdu.
+`agent_codex_close` supprime le fichier PID ; `agent_codex_start` et
+`agent_sweep_expired` peuvent fermer les PID expires qui ne sont plus lies a un
+handle vivant.
 
 ## Appels HTTP
 

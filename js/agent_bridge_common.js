@@ -19,6 +19,7 @@
   var OutputStreamWriter = Packages.java.io.OutputStreamWriter;
   var BufferedWriter = Packages.java.io.BufferedWriter;
   var ProcessBuilder = Packages.java.lang.ProcessBuilder;
+  var ProcessHandle = Packages.java.lang.ProcessHandle;
   var Runnable = Packages.java.lang.Runnable;
   var Thread = Packages.java.lang.Thread;
   var System = Packages.java.lang.System;
@@ -91,6 +92,7 @@
       "formId", "pageId", "applicationId", "currentPage", "currentApplicationId",
       "codexHomeScope", "vibeHomeScope", "homeScope", "codexHome", "vibeHome", "agentHome",
       "mcpEndpoint", "workspaceRoot", "settingsTimeoutMs", "modelsTimeoutMs",
+      "codexRuntimeMode", "codexProtocol",
       "agentRevealMode", "convertigoRevealMode", "uiRevealMode", "revealMode",
       "nocodeMcpToken", "noCodeMcpToken", "mcpBearerToken",
       "nocodeMcpTokenHandle", "noCodeMcpTokenHandle", "mcpBearerTokenHandle",
@@ -444,6 +446,19 @@
       StandardOpenOption.WRITE
     );
     return bytes.length;
+  }
+
+  function readJsonFile(file) {
+    try {
+      var text = readTextFile(file);
+      return trim(text).length ? JSON.parse(text) : null;
+    } catch (_ignoreReadJsonFile) {
+      return null;
+    }
+  }
+
+  function writeJsonFile(file, value) {
+    writeTextFile(file, JSON.stringify(value || {}, null, 2));
   }
 
   function copyFileBinary(source, target) {
@@ -3816,6 +3831,9 @@
       home: publicHomeInfo(home),
       credentials: credentials || { policy: "explicit", sources: [], injectedKeys: [] },
       process: null,
+      pid: 0,
+      pidFile: "",
+      workspaceRoot: "",
       writer: null,
       stdoutThread: null,
       stderrThread: null,
@@ -3837,6 +3855,8 @@
       phase: "spawn",
       sessionId: "",
       codexThreadId: "",
+      codexRuntimeMode: "",
+      activeTurnId: "",
       init: null,
       session: null,
       lastError: "",
@@ -3879,7 +3899,204 @@
     }
   }
 
+  function processPid(process) {
+    try {
+      if (process !== null && typeof process !== "undefined" && process.pid) {
+        return Number(process.pid());
+      }
+    } catch (_ignoreProcessPid) {}
+    return 0;
+  }
+
+  function processHandleForPid(pid) {
+    var numericPid = Number(pid || 0);
+    if (!numericPid) {
+      return null;
+    }
+    try {
+      var optional = ProcessHandle.of(java.lang.Long.valueOf(String(Math.floor(numericPid))));
+      if (optional !== null && optional.isPresent()) {
+        return optional.get();
+      }
+    } catch (_ignoreProcessHandleForPid) {}
+    return null;
+  }
+
+  function processHandleAlive(pid) {
+    var handle = processHandleForPid(pid);
+    if (handle === null) {
+      return false;
+    }
+    try {
+      return handle.isAlive();
+    } catch (_ignoreProcessHandleAlive) {
+      return false;
+    }
+  }
+
+  function destroyProcessHandle(handle, force) {
+    if (handle === null) {
+      return false;
+    }
+    try {
+      if (force === true) {
+        return handle.destroyForcibly();
+      }
+      return handle.destroy();
+    } catch (_ignoreDestroyProcessHandle) {
+      return false;
+    }
+  }
+
+  function destroyPidTree(pid) {
+    var handle = processHandleForPid(pid);
+    if (handle === null) {
+      return false;
+    }
+    var descendants = new ArrayList();
+    try {
+      var iterator = handle.descendants().iterator();
+      while (iterator.hasNext()) {
+        descendants.add(iterator.next());
+      }
+    } catch (_ignoreDescendants) {}
+    for (var i = descendants.size() - 1; i >= 0; i--) {
+      destroyProcessHandle(descendants.get(i), false);
+    }
+    destroyProcessHandle(handle, false);
+    try {
+      Thread.sleep(500);
+    } catch (_ignoreDestroySleep) {}
+    for (var j = descendants.size() - 1; j >= 0; j--) {
+      var child = descendants.get(j);
+      try {
+        if (child.isAlive()) {
+          destroyProcessHandle(child, true);
+        }
+      } catch (_ignoreForceChild) {}
+    }
+    try {
+      if (handle.isAlive()) {
+        destroyProcessHandle(handle, true);
+      }
+    } catch (_ignoreForceHandle) {}
+    return true;
+  }
+
+  function codexPidRegistryDir(workspaceRoot) {
+    var root = trim(workspaceRoot);
+    if (!root.length) {
+      root = engineWorkspaceRoot();
+    }
+    if (!root.length) {
+      return null;
+    }
+    return new File(new File(new File(root, "agents"), "codex"), "app-server-pids");
+  }
+
+  function codexPidFile(workspaceRoot, handle) {
+    var dir = codexPidRegistryDir(workspaceRoot);
+    if (dir === null) {
+      return null;
+    }
+    return new File(dir, safePathPart(handle) + ".json");
+  }
+
+  function registryContainsPid(pid) {
+    var registry = getRegistry();
+    var iterator = registry.keySet().iterator();
+    while (iterator.hasNext()) {
+      var key = String(iterator.next());
+      var entry = registry.get(key);
+      if (entry && Number(entry.pid || 0) === Number(pid || 0) && processAlive(entry.process)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function writeEntryPidFile(entry) {
+    if (!entry || entry.protocol !== "codex-app-server") {
+      return;
+    }
+    var pid = processPid(entry.process);
+    if (!pid) {
+      return;
+    }
+    entry.pid = pid;
+    if (!trim(entry.pidFile).length) {
+      var file = codexPidFile(entry.workspaceRoot || "", entry.handle);
+      entry.pidFile = file === null ? "" : filePath(file);
+    }
+    if (!trim(entry.pidFile).length) {
+      return;
+    }
+    writeJsonFile(new File(entry.pidFile), {
+      provider: entry.provider,
+      protocol: entry.protocol,
+      handle: entry.handle,
+      pid: pid,
+      command: entry.command,
+      cwd: entry.cwd,
+      workspaceRoot: entry.workspaceRoot || "",
+      codexHome: entry.home && entry.home.path ? entry.home.path : "",
+      createdAt: entry.createdAt,
+      lastAccess: entry.lastAccess,
+      ttlMs: entry.ttlMillis
+    });
+  }
+
+  function deleteEntryPidFile(entry) {
+    try {
+      if (entry && trim(entry.pidFile).length) {
+        new File(entry.pidFile)["delete"]();
+      }
+    } catch (_ignoreDeleteEntryPidFile) {}
+  }
+
+  function sweepCodexAppServerPidFiles(workspaceRoot, maxIdleMs) {
+    var dir = codexPidRegistryDir(workspaceRoot);
+    var result = { stopped: [], kept: [] };
+    if (dir === null || !dir.isDirectory()) {
+      return result;
+    }
+    var files = dir.listFiles();
+    if (files === null) {
+      return result;
+    }
+    var current = now();
+    for (var i = 0; i < files.length; i++) {
+      var file = files[i];
+      if (!file.isFile() || String(file.getName()).indexOf(".json") === -1) {
+        continue;
+      }
+      var record = readJsonFile(file);
+      var pid = record ? Number(record.pid || 0) : 0;
+      if (!pid || !processHandleAlive(pid)) {
+        try { file["delete"](); } catch (_ignoreDeleteDeadPidFile) {}
+        continue;
+      }
+      if (registryContainsPid(pid)) {
+        result.kept.push({ pid: pid, handle: record.handle || "", reason: "registered" });
+        continue;
+      }
+      var lastAccess = Number(record.lastAccess || record.createdAt || file.lastModified() || 0);
+      var idle = current - lastAccess;
+      if (maxIdleMs <= 0 || idle > maxIdleMs) {
+        destroyPidTree(pid);
+        try { file["delete"](); } catch (_ignoreDeleteStoppedPidFile) {}
+        result.stopped.push({ pid: pid, handle: record.handle || "", idleMs: idle, reason: "orphan" });
+      } else {
+        result.kept.push({ pid: pid, handle: record.handle || "", idleMs: idle, reason: "grace" });
+      }
+    }
+    return result;
+  }
+
   function writeJson(entry, message) {
+    if (entry && entry.protocol === "codex-app-server" && message && message.jsonrpc) {
+      delete message.jsonrpc;
+    }
     var text = JSON.stringify(message);
     entry.writer.write(text);
     entry.writer.newLine();
@@ -4116,6 +4333,10 @@
   }
 
   function handleProcessLine(entry, line, streamName) {
+    if (entry.protocol === "codex-app-server") {
+      handleCodexAppServerLine(entry, line, streamName);
+      return;
+    }
     if (entry.protocol === "codex-jsonl") {
       handleCodexLine(entry, line, streamName);
       return;
@@ -4199,7 +4420,7 @@
         return pending.response ? pending.response.result || {} : {};
       }
       if (!processAlive(entry.process)) {
-        throw new Error("vibe-acp process exited while waiting for " + pending.method);
+        throw new Error(entry.provider + " process exited while waiting for " + pending.method);
       }
       Thread.sleep(50);
     }
@@ -4232,9 +4453,11 @@
       reasoningEffort: entry.reasoningEffort || "",
       serviceTier: entry.serviceTier || "",
       protocol: entry.protocol,
+      codexRuntimeMode: entry.codexRuntimeMode || "",
       status: entry.status,
       phase: entry.phase,
       alive: processAlive(entry.process),
+      pid: Number(entry.pid || processPid(entry.process) || 0),
       cwd: entry.cwd,
       command: entry.command,
       envKeys: entry.envKeys,
@@ -4249,6 +4472,7 @@
       },
       sessionId: entry.sessionId,
       codexThreadId: entry.codexThreadId || "",
+      activeTurnId: entry.activeTurnId || "",
       codexSessionFile: entry.codexSessionFile || "",
       createdAt: entry.createdAt,
       lastAccess: entry.lastAccess,
@@ -4268,6 +4492,7 @@
     envObjectToMap(pb.environment(), env);
     entry.process = pb.start();
     entry.writer = new BufferedWriter(new OutputStreamWriter(entry.process.getOutputStream(), StandardCharsets.UTF_8));
+    writeEntryPidFile(entry);
     entry.stdoutThread = startReaderThread(entry, entry.process.getInputStream(), "stdout");
     entry.stderrThread = startReaderThread(entry, entry.process.getErrorStream(), "stderr");
     startCodexSessionWatcher(entry);
@@ -4358,6 +4583,7 @@
         }
       }
     } catch (_ignoreDestroy) {}
+    deleteEntryPidFile(entry);
     entry.status = entry.status === "error" ? "error" : "closed";
     entry.closedAt = entry.closedAt || now();
     pushEvent(entry, "system/closed", {

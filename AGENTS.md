@@ -62,6 +62,14 @@ same context.
   differ.
 - Validate Codex setup with `ConvertigoAgentBridge.agent_codex_setup` before
   debugging Assistant UI symptoms.
+- Codex runs in resident app-server mode by default:
+  `codex app-server --listen stdio://`. `agent_codex_start` must stay
+  idempotent for a live handle and return `already_running` rather than spawning
+  another process.
+- Codex app-server starts write PID metadata under
+  `<workspaceRoot>/agents/codex/app-server-pids/<handle>.json`. Keep this file
+  in sync with close/sweep behavior so project reloads do not leave invisible
+  orphan processes.
 
 ## Current 1.2.0 Roadmap
 
@@ -97,6 +105,10 @@ same context.
 - The Assistant startup path should not auto-resume the latest conversation.
   It should list conversations and capabilities; a conversation becomes active
   only when the user resumes it explicitly or sends the first prompt.
+- Once the user explicitly resumes a Codex conversation, the Assistant may
+  prewarm the resident app-server before the first prompt. This prewarm is
+  best-effort and should still rely on `agent_codex_prompt` start fallback if the
+  process is not ready.
 - Python/Vibe setup is separate from Codex setup. Keep the shared helper logic in
   `agent_bridge_common.js` and provider-specific behavior in the provider files.
 
