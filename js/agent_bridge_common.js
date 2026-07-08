@@ -834,6 +834,9 @@
       "- When `mobile-builder-open` returns `browserDebugUrl`, `browserDevToolsJsonUrl`, or `browserDevToolsWebSocketUrl`, treat it as the visible Studio mobile viewer and prefer inspecting or driving that viewer over opening a separate browser.",
       "- Studio JxBrowser exposes one visible viewer target over CDP. Reuse the current browser-control target; do not create new tabs or pages for the mobile builder.",
       "- For viewer automation, use the Playwright MCP tools exposed by the managed Codex configuration. Do not run ad hoc shell scripts with `require('playwright')`, and do not launch a separate browser unless explicitly needed.",
+      "- Before viewer automation, inspect the current browser target with the available Playwright/browser-control MCP tools. It must already be the Studio viewer returned by the latest `mobile-builder-open` call.",
+      "- If the browser target is `about:blank` before `mobile-builder-open` reports `browserControlReady:true`, treat the viewer as still warming up and poll `mobile-builder-open(stateOnly=true, wait=true)` before using Playwright/browser-control.",
+      "- If `mobile-builder-open` reports `browserControlReady:true` but the Playwright/browser-control MCP tools are unavailable, disabled, still on `about:blank`, or attached to another endpoint, report the configuration problem to the user instead of bypassing it with Node scripts, raw CDP WebSocket code, or a new browser.",
       "- If a prompt says Convertigo runtime reveal mode is enabled, pass `reveal:true` only on supported Convertigo mutation/viewer tools that should visibly move Studio or No Code Studio; do not add it to read-only calls.",
       "- For `mobile-builder-open`, use `wait:false` for reveal/focus polls; reserve long `wait:true` calls for readiness proof and omit `reveal` unless the user specifically needs UI focus.",
       isNoCode ? "- You are in the C8Oforms / No-Code Studio surface, not in Eclipse Studio. A selected Convertigo project is optional in this surface." : "- Work on the selected project unless the user explicitly asks for another project.",
@@ -967,6 +970,33 @@
     };
   }
 
+  function removeTrailingPlaywrightConfigComments(lines) {
+    lines = lines || [];
+    var end = lines.length;
+    var i = end - 1;
+    while (i >= 0 && !trim(lines[i]).length) {
+      i--;
+    }
+    var lastContent = i;
+    while (i >= 0) {
+      var line = trim(lines[i]);
+      if (line === "# The Studio JxBrowser CDP endpoint is supplied by the Codex process environment." ||
+          line === "# Do not hardcode it here; several conversations may target different builders." ||
+          line === "# The Studio JxBrowser CDP endpoint is scoped to this Codex home and refreshed per conversation." ||
+          line === "# This scoped home may target a different builder than another conversation." ||
+          line === "# The Studio JxBrowser CDP endpoint is written here because this Codex home is viewer-scoped." ||
+          line === "# If a shared/user home is forced, Playwright MCP stays disabled to avoid opening an external browser.") {
+        i--;
+        continue;
+      }
+      break;
+    }
+    if (i < lastContent) {
+      return lines.slice(0, i + 1);
+    }
+    return lines;
+  }
+
   function npmPackageNameFromSpec(spec) {
     var text = trim(spec);
     if (!text.length) {
@@ -1053,11 +1083,32 @@
     return npx.found ? npx.path : "npx";
   }
 
+  function codexPlaywrightMcpInlineCdpEndpointEnabled(options) {
+    options = options || {};
+    if (!resolvePlaywrightMcpCdpEndpoint(options).length) {
+      return false;
+    }
+    if (boolValue(options.disablePlaywrightMcpCdpEndpoint || options.skipPlaywrightMcpCdpEndpoint, false)) {
+      return false;
+    }
+    if (boolValue(options.inlinePlaywrightMcpCdpEndpoint || options.hardcodePlaywrightMcpCdpEndpoint, false)) {
+      return true;
+    }
+    if (trim(options.codexHome || options.agentHome).length) {
+      return true;
+    }
+    var scopeOption = trim(options.codexHomeScope || options.homeScope || options.scope);
+    if (!scopeOption.length) {
+      return true;
+    }
+    return normalizeCodexHomeScope(scopeOption) === "conversation";
+  }
+
   function codexPlaywrightMcpArgs(options, installDir) {
     options = options || {};
     var args = ["--prefix", codexNpmPrefix(installDir), codexPlaywrightMcpBinaryName(options)];
     var endpoint = resolvePlaywrightMcpCdpEndpoint(options);
-    if (endpoint.length) {
+    if (endpoint.length && codexPlaywrightMcpInlineCdpEndpointEnabled(options)) {
       args.push("--cdp-endpoint");
       args.push(endpoint);
       args.push("--shared-browser-context");
@@ -1070,14 +1121,19 @@
     var text = String(existingText == null ? "" : existingText).replace(/\r\n?/g, "\n");
     var lines = trim(text).length ? splitTextLines(text) : [];
     var removed = removeTomlSection(lines, "mcp_servers.playwright");
-    lines = removed.lines;
+    lines = removeTrailingPlaywrightConfigComments(removed.lines);
     var endpoint = resolvePlaywrightMcpCdpEndpoint(options);
-    var enabled = endpoint.length > 0 && !boolValue(options.disablePlaywrightMcp || options.skipPlaywrightMcpConfig, false);
+    var scopedEndpoint = codexPlaywrightMcpInlineCdpEndpointEnabled(options);
+    var enabled = endpoint.length > 0 && scopedEndpoint && !boolValue(options.disablePlaywrightMcp || options.skipPlaywrightMcpConfig, false);
     if (typeof options.playwrightMcpEnabled !== "undefined" && trim(options.playwrightMcpEnabled).length) {
       enabled = boolValue(options.playwrightMcpEnabled, enabled);
     }
     if (lines.length && trim(lines[lines.length - 1]).length) {
       lines.push("");
+    }
+    if (enabled) {
+      lines.push("# The Studio JxBrowser CDP endpoint is written here because this Codex home is viewer-scoped.");
+      lines.push("# If a shared/user home is forced, Playwright MCP stays disabled to avoid opening an external browser.");
     }
     lines.push("[mcp_servers.playwright]");
     lines.push('command = "' + tomlEscape(codexPlaywrightMcpCommand(options, installDir)) + '"');
@@ -1309,6 +1365,8 @@
       "- If `mobile-builder-open` returns `browserDebugUrl`, `browserDevToolsJsonUrl`, or `browserDevToolsWebSocketUrl`, attach the Playwright MCP browser tools to that visible Studio JxBrowser endpoint and verify the actual feature there.",
       "- Studio JxBrowser exposes one visible viewer target over CDP. Do not create new browser tabs or pages; reuse the current target returned by Playwright/browser-control.",
       "- In managed Codex sessions, browser automation is exposed through the Playwright MCP server configured in `codex-home/config.toml`. Use the MCP browser tools; do not run ad hoc shell scripts with `require('playwright')` or raw WebSocket CDP snippets.",
+      "- Before browser smoke, inspect the current target with the available Playwright/browser-control MCP tools and confirm it is already the Studio viewer returned by `mobile-builder-open`.",
+      "- If Playwright/browser-control MCP tools are missing, disabled, on `about:blank`, stale, or not attached to the returned Studio JxBrowser endpoint, stop the browser proof and tell the user that the managed Playwright MCP configuration must be refreshed. Do not work around it with Node scripts, raw CDP, or a new browser.",
       "- Do not open `DisplayObjects/mobile/...` against the live HMR viewer.",
       "- In prod, the application URL is `.../DisplayObjects/mobile/home`.",
       "- If `mobile-builder-open` reports `compile_error`, treat that as a generator or source-object issue. Do not patch generated runtime sources.",
@@ -2051,7 +2109,11 @@
       };
     }
 
-    var scope = normalizeCodexHomeScope(options.codexHomeScope || options.homeScope || options.scope);
+    var scopeOption = trim(options.codexHomeScope || options.homeScope || options.scope);
+    if (!scopeOption.length && resolvePlaywrightMcpCdpEndpoint(options).length) {
+      scopeOption = "conversation";
+    }
+    var scope = normalizeCodexHomeScope(scopeOption);
     var project = resolveProjectIdOption(options);
     if (scope === "default") {
       return {

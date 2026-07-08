@@ -197,23 +197,44 @@ avec `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`. Aucun navigateur n'est telecharge par
 defaut : Playwright MCP sert a s'attacher au JxBrowser visible expose par le
 Studio via CDP (`browserDebugUrl`, `browserDevToolsWebSocketUrl` ou
 `playwrightCdpEndpoint`). Le bridge configure alors le `codex-home/config.toml`
-gere avec un serveur MCP Playwright :
+gere avec un serveur MCP Playwright stable. Pour un home de conversation,
+l'endpoint CDP est ecrit dans les arguments du serveur Playwright MCP de ce home
+et rafraichi a chaque viewer. Pour un home partage force, Playwright MCP reste
+desactive par defaut afin de ne pas ouvrir un navigateur separe avec un endpoint
+stale.
 
 ```toml
+# The Studio JxBrowser CDP endpoint is written here because this Codex home is viewer-scoped.
+# If a shared/user home is forced, Playwright MCP stays disabled to avoid opening an external browser.
 [mcp_servers.playwright]
 command = "npx"
-args = ["--prefix", "<workspace>/agents/codex/npm", "playwright-mcp", "--cdp-endpoint", "http://localhost:<debug-port>", "--shared-browser-context"]
+args = ["--prefix", "<workspace>/agents/codex/npm", "playwright-mcp", "--cdp-endpoint", "http://localhost:12345", "--shared-browser-context"]
 startup_timeout_sec = 30
 enabled = true
 ```
 
 Les agents doivent utiliser les outils MCP Playwright exposes par Codex. Ils ne
 doivent pas lancer de scripts ad hoc avec `require("playwright")` ni piloter un
-navigateur par CLI hors du serveur MCP.
+navigateur par CLI hors du serveur MCP. Si le premier etat visible par les
+outils navigateur est `about:blank` avant que `mobile-builder-open` ne retourne
+`browserControlReady:true`, l'agent doit traiter le viewer comme encore en
+chauffe et repoller le builder. Si les outils MCP Playwright/browser ne sont pas
+exposes ou ne ciblent toujours pas le JxBrowser courant apres readiness, l'agent
+doit signaler un probleme de configuration au lieu de contourner avec Node, CDP
+brut ou un navigateur separe.
 
 L'installation de la CLI ne configure pas l'authentification Codex. L'utilisateur
 doit toujours disposer d'une session Codex valide dans le `CODEX_HOME` choisi,
 ou utiliser le home Codex par defaut du poste.
+
+## Isolation CODEX_HOME
+
+Par defaut, Codex utilise un home par utilisateur sous
+`<workspace>/agents/codex/homes/users`. Quand un endpoint JxBrowser est fourni
+pour Playwright MCP et qu'aucun scope n'est force par le client, le bridge passe
+sur un home par conversation afin d'isoler la configuration runtime du viewer.
+Les clients peuvent toujours forcer `codexHomeScope=user`, `conversation`,
+`shared`, `default` ou fournir `codexHome` explicitement.
 
 ## Isolation VIBE_HOME
 

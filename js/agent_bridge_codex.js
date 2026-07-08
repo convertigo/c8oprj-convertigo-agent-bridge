@@ -1,6 +1,11 @@
 // Codex CLI provider implementation.
 // Loaded by vibe_agent_bridge.js after agent_bridge_common.js.
 
+  function isConversationScopedCodexHome(value) {
+    var text = trim(value).replace(/\\/g, "/");
+    return text.indexOf("/conversations/") >= 0 && /\/codex-home\/?$/.test(text);
+  }
+
   function codexItemText(item) {
     if (!item) {
       return "";
@@ -1521,15 +1526,32 @@
     var registry = getRegistry();
     var existing = registry.get(handle);
     if (existing !== null && typeof existing !== "undefined" && processAlive(existing.process)) {
-      writeEntryPidFile(existing);
-      rememberSessionHandle(handle);
-      return {
-        ok: true,
-        status: "already_running",
-        handle: handle,
-        state: statusOf(existing),
-        timestamp: now()
-      };
+      var requestedPlaywrightCdpEndpoint = resolvePlaywrightMcpCdpEndpoint(options);
+      var activePlaywrightCdpEndpoint = trim(existing.playwrightCdpEndpoint || existing.viewerCdpEndpoint);
+      var requestedScopeOption = trim(options.codexHomeScope || options.homeScope || options.scope);
+      var requestedScope = requestedPlaywrightCdpEndpoint.length && !requestedScopeOption.length ? "conversation" : normalizeCodexHomeScope(requestedScopeOption);
+      var needsViewerScopedRestart = requestedPlaywrightCdpEndpoint.length && requestedScope === "conversation" && trim(options.codexHome || options.agentHome).length === 0 && existing.home && !isConversationScopedCodexHome(existing.home.path);
+      if ((requestedPlaywrightCdpEndpoint.length && activePlaywrightCdpEndpoint !== requestedPlaywrightCdpEndpoint) || needsViewerScopedRestart) {
+        pushEvent(existing, "warning", {
+          message: "Codex app-server must restart to refresh the managed Playwright MCP viewer endpoint.",
+          provider: "codex",
+          reason: needsViewerScopedRestart ? "playwright_requires_conversation_home" : (activePlaywrightCdpEndpoint.length ? "playwright_endpoint_changed" : "playwright_endpoint_available_after_start"),
+          previousEndpoint: activePlaywrightCdpEndpoint,
+          requestedEndpoint: requestedPlaywrightCdpEndpoint
+        });
+        stopEntry(existing, true);
+        existing = null;
+      } else {
+        writeEntryPidFile(existing);
+        rememberSessionHandle(handle);
+        return {
+          ok: true,
+          status: "already_running",
+          handle: handle,
+          state: statusOf(existing),
+          timestamp: now()
+        };
+      }
     }
 
     var setup = C8O.agentBridge.codexSetup({
@@ -1585,7 +1607,7 @@
       };
     }
 
-    var env = parseObject(options.env, {});
+    var env = mergeEnvObject(codexRuntimeEnv(options, setup.setup.codexHome), parseObject(options.env, {}));
     if (setup.setup.codexHome.length) {
       env.CODEX_HOME = setup.setup.codexHome;
     }
@@ -1739,11 +1761,38 @@
     if (trim(options.serviceTier || options.speedTier).length) {
       entry.serviceTier = trim(options.serviceTier || options.speedTier);
     }
-    if (resolvePlaywrightMcpCdpEndpoint(options).length) {
+    var requestedPlaywrightCdpEndpoint = resolvePlaywrightMcpCdpEndpoint(options);
+    if (entry.protocol === "codex-app-server" && requestedPlaywrightCdpEndpoint.length) {
+      var activePlaywrightCdpEndpoint = trim(entry.playwrightCdpEndpoint || entry.viewerCdpEndpoint);
+      if (activePlaywrightCdpEndpoint !== requestedPlaywrightCdpEndpoint) {
+        var stateBeforeRestart = statusOf(entry);
+        var restartReason = activePlaywrightCdpEndpoint.length ? "playwright_endpoint_changed" : "playwright_endpoint_available_after_start";
+        pushEvent(entry, "warning", {
+          message: "Playwright MCP CDP endpoint changed after the Codex app-server started; restarting the managed Codex process is required before viewer automation.",
+          provider: "codex",
+          reason: restartReason,
+          previousEndpoint: activePlaywrightCdpEndpoint,
+          requestedEndpoint: requestedPlaywrightCdpEndpoint
+        });
+        stopEntry(entry, true);
+        return {
+          ok: false,
+          status: "restart_required",
+          reason: restartReason,
+          handle: handle,
+          error: "Playwright MCP needs a fresh Codex process for the current Studio JxBrowser debug endpoint.",
+          previousPlaywrightCdpEndpoint: activePlaywrightCdpEndpoint,
+          requestedPlaywrightCdpEndpoint: requestedPlaywrightCdpEndpoint,
+          state: stateBeforeRestart,
+          timestamp: now()
+        };
+      }
+    }
+    if (requestedPlaywrightCdpEndpoint.length) {
       entry.browserDebugUrl = trim(options.browserDebugUrl || entry.browserDebugUrl);
       entry.browserDevToolsJsonUrl = trim(options.browserDevToolsJsonUrl || entry.browserDevToolsJsonUrl);
       entry.browserDevToolsWebSocketUrl = trim(options.browserDevToolsWebSocketUrl || entry.browserDevToolsWebSocketUrl);
-      entry.playwrightCdpEndpoint = resolvePlaywrightMcpCdpEndpoint(options);
+      entry.playwrightCdpEndpoint = requestedPlaywrightCdpEndpoint;
       entry.viewerCdpEndpoint = trim(options.viewerCdpEndpoint || entry.playwrightCdpEndpoint || entry.viewerCdpEndpoint);
       entry.playwrightMcpEndpoint = trim(options.playwrightMcpEndpoint || entry.playwrightMcpEndpoint);
     }

@@ -28,7 +28,10 @@ same context.
   - `js/agent_bridge_common.js`
   - `js/agent_bridge_codex.js`
   - `js/vibe_agent_bridge.js`
-- The default Codex home scope is `user`, not the user's global home.
+- The default Codex home scope is `user`, not the user's global home. When a
+  Studio JxBrowser CDP endpoint is supplied for Playwright MCP and no scope is
+  explicitly forced, use `conversation` scope so each live viewer context gets a
+  fresh Codex home and config.
 - The visible default Codex home path is:
   `<workspaceRoot>/agents/codex/homes/users/<stable-user-id>/codex-home`
 - Avoid hidden `.codex-home` directories for the default managed home; Finder
@@ -38,10 +41,18 @@ same context.
 - The managed Codex runtime must also install `@playwright/mcp` in the same npm
   prefix, with browser downloads disabled. Codex `config.toml` must expose it as
   `[mcp_servers.playwright]` using `npx --prefix <workspaceRoot>/agents/codex/npm
-  playwright-mcp`.
+  playwright-mcp --cdp-endpoint <Studio JxBrowser debug URL>
+  --shared-browser-context` only for viewer-scoped homes. For forced shared/user
+  homes, keep Playwright MCP disabled unless the caller explicitly accepts a
+  hardcoded endpoint.
 - Agents must use the Playwright MCP browser tools for viewer automation. Do not
   instruct agents to run ad hoc Node scripts with `require("playwright")` or
-  `chromium.connectOverCDP(...)`.
+  `chromium.connectOverCDP(...)`. If the browser target is `about:blank` before
+  `mobile-builder-open` reports `browserControlReady:true`, instruct the agent
+  to poll the builder readiness. If the tools are unavailable, disabled, still
+  on `about:blank` after readiness, stale, or attached to another endpoint,
+  instruct the agent to report the managed MCP configuration issue instead of
+  bypassing it.
 - Codex setup must synchronize the Convertigo Generalist skill into the managed
   `codex-home/skills/convertigo-generalist/SKILL.md` and write MCP config into
   `codex-home/config.toml`.
@@ -84,10 +95,10 @@ same context.
   should not be a user-visible choice in Studio.
 - `mobile-builder-open` may return `browserDebugUrl`,
   `browserDevToolsJsonUrl`, and `browserDevToolsWebSocketUrl`. These values
-  target the visible Studio JxBrowser mobile viewer. The bridge should pass the
-  CDP endpoint into the Codex home config so `[mcp_servers.playwright]` starts
-  `@playwright/mcp` against the visible viewer instead of opening a separate
-  browser.
+  target the visible Studio JxBrowser mobile viewer. The bridge should scope the
+  CDP endpoint to the managed Codex home used for that conversation so
+  `[mcp_servers.playwright]` starts `@playwright/mcp` against the visible viewer
+  instead of opening a separate browser.
 
 ## Vibe Integration
 
