@@ -5,6 +5,10 @@ comment: Send a prompt to Codex CLI through codex exec --json. Poll agent_events
     result = C8O.agentBridge.codexPrompt({
       handle: typeof handle === "undefined" ? "" : handle,
       prompt: typeof prompt === "undefined" ? "" : prompt,
+      conversationId: typeof conversationId === "undefined" ? "" : conversationId,
+      workspaceRoot: typeof workspaceRoot === "undefined" ? "" : workspaceRoot,
+      userId: typeof userId === "undefined" ? "" : userId,
+      projectId: typeof projectId === "undefined" ? "" : projectId,
       codexThreadId: typeof codexThreadId === "undefined" ? "" : codexThreadId,
       sessionId: typeof sessionId === "undefined" ? "" : sessionId,
       externalSessionId: typeof externalSessionId === "undefined" ? "" : externalSessionId,
@@ -86,3 +90,15 @@ comment: Send a prompt to Codex CLI through codex exec --json. Poll agent_events
   comment: Set true to tell the agent to pass reveal=true on supported Convertigo mutation/viewer tools for this turn.
   description: Set true to tell the agent to pass reveal=true on supported Convertigo mutation/viewer tools for this turn.
   value: false
+↓conversationId [variables.RequestableVariable-1785339072196]: 
+  comment: Conversation identifier preserved across managed Codex restarts.
+  description: Conversation identifier preserved across managed Codex restarts.
+↓workspaceRoot [variables.RequestableVariable-1785339072214]: 
+  comment: Convertigo workspace root used by the managed agent runtime.
+  description: Convertigo workspace root used by the managed agent runtime.
+↓userId [variables.RequestableVariable-1785339072216]: 
+  comment: User identifier used for the conversation-scoped Codex home.
+  description: User identifier used for the conversation-scoped Codex home.
+↓projectId [variables.RequestableVariable-1785339072218]: 
+  comment: Current Convertigo project identifier.
+  description: Current Convertigo project identifier.

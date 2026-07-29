@@ -1,0 +1,60 @@
+comment: Remove conversation-scoped agent artifacts and periodically purge unreferenced storage.
+↓Run [steps.SimpleStep-1785339093426]: 
+  expression: |
+    'include("js/vibe_agent_bridge.js");
+    result = C8O.agentBridge.cleanupStorage({
+      workspaceRoot: typeof workspaceRoot === "undefined" ? "" : workspaceRoot,
+      userId: typeof userId === "undefined" ? "" : userId,
+      userKey: typeof userKey === "undefined" ? "" : userKey,
+      conversationId: typeof conversationId === "undefined" ? "" : conversationId,
+      threadid: typeof threadid === "undefined" ? "" : threadid,
+      handle: typeof handle === "undefined" ? "" : handle,
+      externalSessionId: typeof externalSessionId === "undefined" ? "" : externalSessionId,
+      force: typeof force === "undefined" ? "" : force,
+      intervalSeconds: typeof intervalSeconds === "undefined" ? "" : intervalSeconds,
+      orphanGraceSeconds: typeof orphanGraceSeconds === "undefined" ? "" : orphanGraceSeconds
+    });'
+↓result [steps.JsonToXmlStep-1785339093428]: 
+  jsonObject: 
+    - xmlizable: 
+      - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
+      - SmartType: 
+        - ↑mode: JS
+        - →→: result
+  key: 
+    - xmlizable: 
+      - ↑classname: com.twinsoft.convertigo.beans.steps.SmartType
+      - SmartType: 
+        - ↑mode: PLAIN
+        - →→: result
+↓workspaceRoot [variables.RequestableVariable-1785339093438]: 
+  comment: Convertigo workspace root. Defaults to the engine user workspace.
+  description: Convertigo workspace root. Defaults to the engine user workspace.
+↓userId [variables.RequestableVariable-1785339093442]: 
+  comment: Raw user identifier for conversation-scoped homes.
+  description: Raw user identifier for conversation-scoped homes.
+↓userKey [variables.RequestableVariable-1785339093445]: 
+  comment: Already-normalized Assistant user storage key.
+  description: Already-normalized Assistant user storage key.
+↓conversationId [variables.RequestableVariable-1785339093447]: 
+  comment: Conversation whose artifacts must be deleted immediately.
+  description: Conversation whose artifacts must be deleted immediately.
+↓threadid [variables.RequestableVariable-1785339093449]: 
+  comment: Alias for conversationId.
+  description: Alias for conversationId.
+↓handle [variables.RequestableVariable-1785339093451]: 
+  comment: Managed process handle associated with the conversation.
+  description: Managed process handle associated with the conversation.
+↓externalSessionId [variables.RequestableVariable-1785339093453]: 
+  comment: Codex thread id used to locate a non-deterministic legacy home.
+  description: Codex thread id used to locate a non-deterministic legacy home.
+↓force [variables.RequestableVariable-1785339093455]: 
+  comment: Bypass the six-hour periodic cleanup interval.
+  description: Bypass the six-hour periodic cleanup interval.
+  value: false
+↓intervalSeconds [variables.RequestableVariable-1785339093457]: 
+  comment: Periodic cleanup interval. Defaults to 21600 seconds.
+  description: Periodic cleanup interval. Defaults to 21600 seconds.
+↓orphanGraceSeconds [variables.RequestableVariable-1785339093459]: 
+  comment: Minimum age before deleting an unreferenced artifact. Defaults to 86400 seconds.
+  description: Minimum age before deleting an unreferenced artifact. Defaults to 86400 seconds.

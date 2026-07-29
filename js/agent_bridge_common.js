@@ -5,11 +5,17 @@
   var SESSION_CONVERSATION_ATTR = "ConvertigoAgentBridge.currentConversationId";
   var FALLBACK_MCP_PATH = "/api/mcp";
   var DEFAULT_TTL_SECONDS = 3600;
+  var RUNTIME_UPDATE_CACHE_KEY = "ConvertigoAgentBridge.runtimeUpdateCache.v1";
+  var RUNTIME_UPDATE_CACHE_FILE = "runtime-update-checks.json";
+  var DEFAULT_RUNTIME_UPDATE_CACHE_MS = 21600000;
+  var STORAGE_CLEANUP_FILE = "storage-cleanup.json";
+  var DEFAULT_STORAGE_CLEANUP_INTERVAL_MS = 21600000;
+  var DEFAULT_STORAGE_ORPHAN_GRACE_MS = 86400000;
   var DEFAULT_EVENT_LIMIT = 100;
   var MAX_EVENT_LIMIT = 500;
   var MAX_EVENT_BUFFER = 5000;
   var NOCODE_MCP_TOKEN_ENV = "C8O_NOCODE_MCP_TOKEN";
-  var MCP_GUIDANCE_VERSION = "2026-07-01.skill-sync-v3";
+  var MCP_GUIDANCE_VERSION = "2026-07-29.convergent-workflow-v3";
 
   var File = Packages.java.io.File;
   var FileOutputStream = Packages.java.io.FileOutputStream;
@@ -40,6 +46,7 @@
   var JsonOutput = Packages.com.twinsoft.convertigo.engine.enums.JsonOutput;
   var Engine = Packages.com.twinsoft.convertigo.engine.Engine;
   var ProcessUtils = Packages.com.twinsoft.convertigo.engine.util.ProcessUtils;
+  var NetworkUtils = Packages.com.twinsoft.convertigo.engine.util.NetworkUtils;
 
   var DEFAULT_PYTHON_VERSION = "3.12.13";
   var DEFAULT_PYTHON_BUILD_TAG = "20260610";
@@ -86,18 +93,20 @@
     }
     [
       "provider", "agent", "agentProvider", "targetProject", "projectName", "projectId", "primaryProject",
+      "conversationId", "threadid", "handle",
       "userId", "agentProfile", "skillProfile", "assistantContext", "assistantSurface", "profile",
       "currentUrl", "currentRoute", "currentPath", "currentFormId", "currentFormUrl",
       "nocodeCurrentUrl", "nocodeCurrentRoute", "nocodeCurrentFormId", "nocodeCurrentFormUrl",
       "formId", "pageId", "applicationId", "currentPage", "currentApplicationId",
       "codexHomeScope", "vibeHomeScope", "homeScope", "codexHome", "vibeHome", "agentHome",
       "mcpEndpoint", "workspaceRoot", "settingsTimeoutMs", "modelsTimeoutMs",
+      "checkUpdates", "refreshUpdateCheck", "updateCheckTimeoutMs", "updateCheckCacheMs", "runtimePresenceOnly",
       "codexRuntimeMode", "codexProtocol",
       "agentRevealMode", "convertigoRevealMode", "uiRevealMode", "revealMode",
       "nocodeMcpToken", "noCodeMcpToken", "mcpBearerToken",
       "nocodeMcpTokenHandle", "noCodeMcpTokenHandle", "mcpBearerTokenHandle",
       "browserDebugUrl", "browserDevToolsJsonUrl", "browserDevToolsWebSocketUrl",
-      "playwrightCdpEndpoint", "playwrightMcpEndpoint", "viewerCdpEndpoint"
+      "playwrightCdpEndpoint", "playwrightMcpEndpoint", "viewerCdpEndpoint", "viewerDebugPort"
     ].forEach(function (name) {
       if (!trim(copy[name]).length) {
         var value = requestParameter(name);
@@ -832,14 +841,17 @@
       isNoCode ? "- Automatically follow the Convertigo NoCode workflow for C8Oforms / No-Code Studio work." : "- Automatically follow the Convertigo Generalist workflow for Convertigo project work.",
       "- Use the Convertigo MCP/tools whenever you need to inspect, modify, save, reload, or validate Convertigo projects.",
       "- When `mobile-builder-open` returns `browserDebugUrl`, `browserDevToolsJsonUrl`, or `browserDevToolsWebSocketUrl`, treat it as the visible Studio mobile viewer and prefer inspecting or driving that viewer over opening a separate browser.",
-      "- Studio JxBrowser exposes one visible viewer target over CDP. Reuse the current browser-control target; do not create new tabs or pages for the mobile builder.",
+      "- If `mobile-builder-open(stateOnly=true)` returns `status:\"stopped\"`, immediately call it once with `stateOnly=false, wait=false`; do not spend a timeout polling an inactive builder.",
+      "- Studio JxBrowser exposes one existing visible page over CDP, not a normal multi-tab browser. Reuse it and do not create, open, close, select, or navigate tabs/pages.",
       "- For viewer automation, use the Playwright MCP tools exposed by the managed Codex configuration. Do not run ad hoc shell scripts with `require('playwright')`, and do not launch a separate browser unless explicitly needed.",
-      "- Before viewer automation, inspect the current browser target with the available Playwright/browser-control MCP tools. It must already be the Studio viewer returned by the latest `mobile-builder-open` call.",
-      "- If the browser target is `about:blank` before `mobile-builder-open` reports `browserControlReady:true`, treat the viewer as still warming up and poll `mobile-builder-open(stateOnly=true, wait=true)` before using Playwright/browser-control.",
+      "- Use Playwright only after `mobile-builder-open` reports both `browserDebugPortMatched:true` and `browserControlReady:true`.",
+      "- Known-good fast check: call `playwright.browser_tabs` only to list and confirm the single current viewer URL, use `playwright.browser_find` for visible UI, and use `playwright.browser_evaluate` only for DOM state or timing. Do not probe unsupported browser features first.",
+      "- If the browser target is `about:blank` while builder status is `building`, poll `mobile-builder-open(stateOnly=true, wait=true)` before Playwright. If status is `stopped`, launch asynchronously instead.",
       "- If `mobile-builder-open` reports `browserControlReady:true` but the Playwright/browser-control MCP tools are unavailable, disabled, still on `about:blank`, or attached to another endpoint, report the configuration problem to the user instead of bypassing it with Node scripts, raw CDP WebSocket code, or a new browser.",
       "- If a prompt says Convertigo runtime reveal mode is enabled, pass `reveal:true` only on supported Convertigo mutation/viewer tools that should visibly move Studio or No Code Studio; do not add it to read-only calls.",
       "- For `mobile-builder-open`, use `wait:false` for reveal/focus polls; reserve long `wait:true` calls for readiness proof and omit `reveal` unless the user specifically needs UI focus.",
       isNoCode ? "- You are in the C8Oforms / No-Code Studio surface, not in Eclipse Studio. A selected Convertigo project is optional in this surface." : "- Work on the selected project unless the user explicitly asks for another project.",
+      isNoCode ? "" : "- If no project is selected and the user explicitly asks to create a new project or application, derive a concise valid technical name when needed, check for collisions through Convertigo MCP, and proceed without asking for a project selection.",
       isNoCode ? "- Discover forms, applications, pages, data sources, roles, publication state, and permissions through the NoCode/C8Oforms MCP context before falling back to generic Studio project inspection." : "",
       isNoCode ? "- If the current NoCode URL, form id, route, or page id is supplied in the prompt, treat it as the default target for edits unless the user names another target." : "",
       isNoCode ? "- If a first tool discovery attempt does not show `nocode-form-*` tools, retry with exact searches for `Convertigo NoCode form contract get edit update validate compile C8Oforms`, `nocode-form-contract-get nocode-form-edit nocode-form-update`, and `mcp__convertigo nocode_form_contract_get nocode_form_edit nocode_form_update` before reporting a blocker." : "",
@@ -1012,6 +1024,10 @@
 
   function resolvePlaywrightMcpCdpEndpoint(options) {
     options = options || {};
+    var viewerDebugPort = intValue(options.viewerDebugPort, 0, 0, 65535);
+    if (viewerDebugPort >= 1024) {
+      return "http://localhost:" + viewerDebugPort;
+    }
     var endpoint = trim(
       options.playwrightCdpEndpoint ||
       options.viewerCdpEndpoint ||
@@ -1024,6 +1040,103 @@
       return endpoint.replace(/\/json\/?$/, "");
     }
     return endpoint;
+  }
+
+  function viewerDebugPortLeaseFile(options) {
+    options = options || {};
+    var conversationId = trim(options.conversationId || options.threadid || options.handle);
+    if (!conversationId.length) {
+      return null;
+    }
+    var root = new File(new File(new File(resolveWorkspaceRoot(options), "agents"), "codex"), "viewer-debug-ports");
+    return new File(root, safePathPart(conversationId) + ".json");
+  }
+
+  function stableViewerDebugPortBase(value) {
+    var text = String(value || "");
+    var hash = 0;
+    for (var i = 0; i < text.length; i++) {
+      hash = ((hash * 31) + text.charCodeAt(i)) & 0x7fffffff;
+    }
+    return 40000 + (hash % 10000);
+  }
+
+  function leasedViewerDebugPorts(leaseFile) {
+    var used = {};
+    if (leaseFile === null || leaseFile.getParentFile() === null || !leaseFile.getParentFile().isDirectory()) {
+      return used;
+    }
+    var currentPath = filePath(leaseFile);
+    var files = leaseFile.getParentFile().listFiles();
+    if (files === null) {
+      return used;
+    }
+    for (var i = 0; i < files.length; i++) {
+      var file = files[i];
+      if (!file.isFile() || filePath(file) === currentPath) {
+        continue;
+      }
+      try {
+        var lease = parseObject(readTextFile(file), {});
+        var port = intValue(lease.port, 0, 0, 65535);
+        if (port >= 1024) {
+          used[String(port)] = true;
+        }
+      } catch (_ignoreViewerDebugPortLease) {}
+    }
+    return used;
+  }
+
+  function ensureManagedViewerDebugPort(options) {
+    options = options || {};
+    var explicitPort = intValue(options.viewerDebugPort, 0, 0, 65535);
+    if (explicitPort >= 1024) {
+      options.viewerDebugPort = explicitPort;
+      return explicitPort;
+    }
+    if (boolValue(options.disableViewerDebugPortReservation || options.skipViewerDebugPortReservation, false)) {
+      return 0;
+    }
+    if (normalizeSkillProfile(options) === "nocode") {
+      return 0;
+    }
+    var leaseFile = viewerDebugPortLeaseFile(options);
+    if (leaseFile === null) {
+      return 0;
+    }
+    var leasedPorts = leasedViewerDebugPorts(leaseFile);
+    try {
+      if (leaseFile.isFile()) {
+        var lease = parseObject(readTextFile(leaseFile), {});
+        var leasedPort = intValue(lease.port, 0, 0, 65535);
+        if (leasedPort >= 1024 && leasedPorts[String(leasedPort)] !== true) {
+          options.viewerDebugPort = leasedPort;
+          return leasedPort;
+        }
+      }
+    } catch (_ignoreViewerDebugPortLeaseRead) {}
+
+    var conversationId = trim(options.conversationId || options.threadid || options.handle);
+    var basePort = stableViewerDebugPortBase(conversationId);
+    var port = 0;
+    for (var offset = 0; offset < 10000; offset++) {
+      var candidate = 40000 + ((basePort - 40000 + offset) % 10000);
+      if (leasedPorts[String(candidate)] !== true && Number(NetworkUtils.nextAvailable(candidate)) === candidate) {
+        port = candidate;
+        break;
+      }
+    }
+    if (port < 1024 || port > 65535) {
+      throw new Error("Unable to reserve a Studio viewer debug port");
+    }
+    ensureDirectory(leaseFile.getParentFile());
+    writeTextFile(leaseFile, JSON.stringify({
+      conversationId: conversationId,
+      port: port,
+      createdAt: now()
+    }, null, 2) + "\n");
+    options.viewerDebugPort = port;
+    return port;
   }
 
   function codexPlaywrightMcpPackageSpec(options) {
@@ -1157,9 +1270,44 @@
     var urlLine = 'url = "' + tomlEscape(mcpEndpoint) + '"';
     var timeoutLine = "startup_timeout_sec = 60";
     var enabledLine = "enabled = true";
+    var guidanceHeaderEntry = '"X-Convertigo-Guidance-Version" = "' + tomlEscape(MCP_GUIDANCE_VERSION) + '"';
+    var viewerDebugPort = intValue(options.viewerDebugPort, 0, 0, 65535);
+    var viewerDebugPortHeaderEntry = viewerDebugPort >= 1024
+      ? '"X-Convertigo-Viewer-Debug-Port" = "' + tomlEscape(String(viewerDebugPort)) + '"'
+      : "";
+    var managedHeadersLine = "http_headers = { " + guidanceHeaderEntry
+      + (viewerDebugPortHeaderEntry.length ? ", " + viewerDebugPortHeaderEntry : "") + " }";
     var useBearer = normalizeSkillProfile(options || {}) === "nocode";
     var bearerLine = 'bearer_token_env_var = "' + tomlEscape(NOCODE_MCP_TOKEN_ENV) + '"';
     var status = "unchanged";
+
+    var mergeManagedHeaders = function (line) {
+      var source = String(line || "");
+      var open = source.indexOf("{");
+      var close = source.lastIndexOf("}");
+      if (open < 0 || close <= open) {
+        return managedHeadersLine;
+      }
+      var body = trim(source.substring(open + 1, close));
+      var guidancePattern = /(["']X-Convertigo-Guidance-Version["']\s*=\s*)["'][^"']*["']/;
+      var viewerDebugPortPattern = /(["']X-Convertigo-Viewer-Debug-Port["']\s*=\s*)["'][^"']*["']/;
+      if (guidancePattern.test(body)) {
+        body = body.replace(guidancePattern, guidanceHeaderEntry);
+      } else {
+        body = body.length ? body + ", " + guidanceHeaderEntry : guidanceHeaderEntry;
+      }
+      if (viewerDebugPortHeaderEntry.length) {
+        if (viewerDebugPortPattern.test(body)) {
+          body = body.replace(viewerDebugPortPattern, viewerDebugPortHeaderEntry);
+        } else {
+          body = body.length ? body + ", " + viewerDebugPortHeaderEntry : viewerDebugPortHeaderEntry;
+        }
+      } else if (viewerDebugPortPattern.test(body)) {
+        body = body.replace(viewerDebugPortPattern, "");
+        body = body.replace(/^\s*,\s*|\s*,\s*$/g, "").replace(/\s*,\s*,\s*/g, ", ");
+      }
+      return "http_headers = { " + body + " }";
+    };
 
     if (!range.found) {
       if (lines.length && trim(lines[lines.length - 1]).length) {
@@ -1169,6 +1317,7 @@
       lines.push(urlLine);
       lines.push(timeoutLine);
       lines.push(enabledLine);
+      lines.push(managedHeadersLine);
       if (useBearer) {
         lines.push(bearerLine);
       }
@@ -1187,6 +1336,7 @@
     var replacedUrl = false;
     var replacedTimeout = false;
     var replacedEnabled = false;
+    var replacedGuidanceHeaders = false;
     var replacedBearer = false;
     for (var i = 1; i < sectionLines.length; i++) {
       if (/^\s*url\s*=/.test(sectionLines[i])) {
@@ -1211,6 +1361,15 @@
           status = "updated";
         }
         replacedEnabled = true;
+        continue;
+      }
+      if (/^\s*http_headers\s*=/.test(sectionLines[i])) {
+        var mergedGuidanceHeaders = mergeManagedHeaders(sectionLines[i]);
+        if (trim(sectionLines[i]) !== mergedGuidanceHeaders) {
+          sectionLines[i] = mergedGuidanceHeaders;
+          status = "updated";
+        }
+        replacedGuidanceHeaders = true;
         continue;
       }
       if (/^\s*bearer_token_env_var\s*=/.test(sectionLines[i])) {
@@ -1244,6 +1403,10 @@
         }
       }
       sectionLines.splice(enabledIndex, 0, enabledLine);
+      status = "updated";
+    }
+    if (!replacedGuidanceHeaders) {
+      sectionLines.push(managedHeadersLine);
       status = "updated";
     }
     if (useBearer && !replacedBearer) {
@@ -1316,24 +1479,37 @@
       "",
       "- Skill guidance version: `" + MCP_GUIDANCE_VERSION + "`.",
       "- During bootstrap, compare this value with `MCP guidance version` in `convertigo://capabilities`. If the MCP value differs or is missing, treat the installed skill and MCP endpoint as out of sync; rerun the Studio Codex setup for the current MCP endpoint or ask before project mutation.",
-      "- When the caller surface supports MCP request metadata, send `params._meta.convertigoGuidanceVersion` with this skill guidance version on the first guarded Convertigo `tools/call`; raw HTTP clients may use the `X-Convertigo-Guidance-Version` header. The MCP only warns on bootstrap or mutation guard tools, so treat `_meta.convertigoGuidanceWarning` as a setup refresh signal before further project mutation.",
+      "- When the caller surface supports MCP request metadata, send `params._meta.convertigoGuidanceVersion` with this skill guidance version on the first guarded Convertigo `tools/call`; raw HTTP clients may use the `X-Convertigo-Guidance-Version` header. An `_meta.convertigoGuidanceWarning` mismatch requires setup refresh before project mutation. A missing-version warning is advisory when this skill version already matches `convertigo://capabilities`: continue the current task and let the managed host refresh its transport configuration.",
       "",
       "## Mandatory bootstrap",
       "",
-      "1. Call `resources/list`.",
-      "2. If the caller surface exposes it, call `prompts/list`.",
-      "3. Read `convertigo://capabilities`.",
-      "4. Verify the skill freshness rule above against the `MCP guidance version` from capabilities.",
-      "5. Read `convertigo://recipes/quickstart`.",
-      "6. Read `convertigo://resources/convertigo-start`.",
-      "7. Only then decide the route:",
+      "1. Read `convertigo://capabilities` directly and verify the skill freshness rule above.",
+      "2. Do not call `resources/list`, `resources/templates/list`, or `prompts/list` when this skill already names the required URI or tool. Use catalog discovery only when the task cannot be routed from this skill, a named resource is missing, or the MCP reports a guidance mismatch.",
+      "3. Select the smallest matching route and read only its entry recipe before mutation:",
       "   - Standard SQL CRUD + starter NGX UI: read `convertigo://resources/convertigo-crud-fastpath` and use `convertigo-crud-fastpath`.",
       "   - Existing deterministic CRUD project edits: also read `convertigo://resources/convertigo-crud-edit-fastpath`, then stay on the CRUD rail without replaying the new-project bootstrap.",
       "   - New starter NGX app outside the CRUD rail: read `convertigo://resources/convertigo-recipe-starter-extension` before import, then if the app has backend or open-data results, read `convertigo://resources/convertigo-recipe-ngx-data-page` before any page mutation.",
-      "   - NGX / Ionic UI creation or edits outside the CRUD rail: read `convertigo://resources/convertigo-recipe-ngx-data-page` first for data-backed pages, then `convertigo://resources/convertigo-frontend-ngx` before UI mutations.",
-      "   - Non-CRUD work or tasks outside the deterministic rail: stay exploratory and follow `convertigo-quickstart`.",
-      "8. Do not call `rag-query` before the start guide and the chosen recipe were read.",
-      "9. If the user explicitly wants MCP-only work or the starting workspace is empty/non-relevant, do not inspect the local shell workspace before the MCP route decision is made.",
+      "   - NGX / Ionic UI creation or edits outside the CRUD rail: read `convertigo://resources/convertigo-recipe-ngx-data-page` for data-backed pages. Read `convertigo://resources/convertigo-frontend-ngx` only when the recipe and live palette contract leave an implementation question.",
+      "   - Other tasks: read `convertigo://resources/convertigo-start`, then the smallest matching recipe. Read `convertigo://recipes/quickstart` only when route selection remains ambiguous.",
+      "4. Do not call `rag-query` before the chosen recipe was tried.",
+      "5. If the user explicitly wants MCP-only work or the starting workspace is empty/non-relevant, do not inspect the local shell workspace before the MCP route decision is made.",
+      "",
+      "## Tool economy and convergence",
+      "",
+      "- Treat every tool round trip and large response as part of the task cost. Prefer targeted reads and request only the depth, properties, logs, or detail needed for the next decision.",
+      "- Do not repeat catalog, guide, palette, tree, builder, or browser reads whose answer is already present in the current conversation.",
+      "- Use `palette-list` to locate an unfamiliar object type and `palette-describe` only for properties that remain uncertain. Group independent descriptions when the caller can do so safely.",
+      "- Build one coherent mutation plan before the first write. Prefer one optimized `batch-call` for independent or ordered source-object changes, followed by one targeted readback.",
+      "- Start the viewer asynchronously once UI work is known. Finish the source mutations while it builds, then perform one readiness check and one acceptance-oriented browser proof. Add another cycle only when the proof identifies a concrete defect.",
+      "- A browser proof should evaluate all relevant acceptance criteria together when practical: visible content, layout/style, interaction or timed state, and console/runtime errors.",
+      "- Stop after the requested behavior is green. Do not add an unsolicited polish pass or repeat proof that cannot change the conclusion.",
+      "",
+      "## NGX authoring invariants",
+      "",
+      "- Use the exact SmartType shape reported by the live palette or a successful readback. Do not invent aliases such as `JS`, `SCRIPT`, `PLAIN`, `expression`, or `value` interchangeably.",
+      "- For page state changed outside an Angular/Ionic event, such as timers, external callbacks, or third-party subscriptions, ensure Angular change detection is triggered through the supported page context before claiming live updates.",
+      "- Scope page CSS to the element that actually paints the visible area. Do not assume a class or CSS variable crosses an Ionic shadow boundary; include background coverage in the first browser proof.",
+      "- When a mutation result reports skipped or normalized properties, repair them before browser proof instead of relying on runtime trial and error.",
       "",
       "## CRUD routing",
       "",
@@ -1355,6 +1531,7 @@
       "## Project naming",
       "",
       "- Use exactly the project name requested by the user when it is technically valid.",
+      "- If no project is selected and the user explicitly asks to create a new project or application without giving a technical name, derive one concise valid name from the requested product or function, check `project-list` for collisions, then proceed without asking the user to select a project.",
       "- Do not invent prefixes, suffixes, or dates.",
       "- If the requested name collides with an existing project, surface the collision explicitly instead of renaming it.",
       "",
@@ -1363,9 +1540,12 @@
       "- In dev, `mobile-builder-open` serves the live app from the viewer root. Prefer `viewerHomeUrl`, or fall back to `viewerBaseUrl`.",
       "- For frontend work, call `mobile-builder-open` with `wait=false` as soon as the UI project is known, continue other work while it starts, then call `mobile-builder-open(stateOnly=true, wait=true)` or a normal waited call before browser smoke or final proof.",
       "- If `mobile-builder-open` returns `browserDebugUrl`, `browserDevToolsJsonUrl`, or `browserDevToolsWebSocketUrl`, attach the Playwright MCP browser tools to that visible Studio JxBrowser endpoint and verify the actual feature there.",
-      "- Studio JxBrowser exposes one visible viewer target over CDP. Do not create new browser tabs or pages; reuse the current target returned by Playwright/browser-control.",
+      "- If a state-only call returns `status:\"stopped\"`, do not poll it again: immediately call `mobile-builder-open(stateOnly=false, wait=false)` once, continue other work while it starts, then poll readiness.",
+      "- Use Playwright MCP only after `mobile-builder-open` reports both `browserDebugPortMatched:true` and `browserControlReady:true`.",
+      "- Studio JxBrowser exposes one existing visible page over CDP, not a normal multi-tab browser. Do not create, open, close, select, or navigate tabs/pages; reuse the current page.",
       "- In managed Codex sessions, browser automation is exposed through the Playwright MCP server configured in `codex-home/config.toml`. Use the MCP browser tools; do not run ad hoc shell scripts with `require('playwright')` or raw WebSocket CDP snippets.",
-      "- Before browser smoke, inspect the current target with the available Playwright/browser-control MCP tools and confirm it is already the Studio viewer returned by `mobile-builder-open`.",
+      "- Known-good fast check on this JxBrowser target: call `playwright.browser_tabs` only to list and confirm the single current viewer URL, use `playwright.browser_find` for visible UI, and use `playwright.browser_evaluate` only when DOM state or timing must be measured. Do not probe unsupported browser features before this minimal check.",
+      "- An `about:blank` target means the loader is not ready. If the builder status is `building`, poll `mobile-builder-open(stateOnly=true, wait=true)`; if it is `stopped`, launch it asynchronously as described above.",
       "- If Playwright/browser-control MCP tools are missing, disabled, on `about:blank`, stale, or not attached to the returned Studio JxBrowser endpoint, stop the browser proof and tell the user that the managed Playwright MCP configuration must be refreshed. Do not work around it with Node scripts, raw CDP, or a new browser.",
       "- Do not open `DisplayObjects/mobile/...` against the live HMR viewer.",
       "- In prod, the application URL is `.../DisplayObjects/mobile/home`.",
@@ -1416,14 +1596,14 @@
       "",
       "- Skill guidance version: `" + MCP_GUIDANCE_VERSION + "`.",
       "- During bootstrap, compare this value with `MCP guidance version` in `convertigo://capabilities`. If the MCP value differs or is missing, rerun the Studio Codex setup for the current MCP endpoint before using no-code mutation tools.",
-      "- When the caller surface supports MCP request metadata, send `params._meta.convertigoGuidanceVersion` with this skill guidance version on the first guarded Convertigo `tools/call`; raw HTTP clients may use the `X-Convertigo-Guidance-Version` header. The MCP only warns on bootstrap or mutation guard tools, so treat `_meta.convertigoGuidanceWarning` as a setup refresh signal before further no-code mutation.",
+      "- When the caller surface supports MCP request metadata, send `params._meta.convertigoGuidanceVersion` with this skill guidance version on the first guarded Convertigo `tools/call`; raw HTTP clients may use the `X-Convertigo-Guidance-Version` header. An `_meta.convertigoGuidanceWarning` mismatch requires setup refresh before no-code mutation. A missing-version warning is advisory when this skill version already matches `convertigo://capabilities`: continue the current task and let the managed host refresh its transport configuration.",
       "",
       "## Mandatory workflow",
       "",
-      "1. Call `resources/list` and `prompts/list` when available.",
-      "2. Read `convertigo://capabilities`, `convertigo://recipes/quickstart`, and `convertigo://resources/convertigo-start` before changing anything.",
-      "3. Treat the selected no-code context as the source of truth. In C8Oforms, target the `C8Oforms` project unless the user explicitly names another no-code project.",
-      "4. Use Convertigo MCP tools to inspect, edit, save, reload, and validate. Do not edit generated folders such as `_private/ionic`, `DisplayObjects`, `dist`, or build outputs.",
+      "1. Read `convertigo://capabilities` directly to verify guidance freshness. Skip catalog and prompt lists when this skill already names the required no-code tools.",
+      "2. Treat the selected no-code context as the source of truth. In C8Oforms, target the `C8Oforms` project unless the user explicitly names another no-code project.",
+      "3. Use Convertigo MCP tools to inspect, edit, save, reload, and validate. Do not edit generated folders such as `_private/ionic`, `DisplayObjects`, `dist`, or build outputs.",
+      "4. Prefer one contract read, one coherent mutation, and one compile/validation pass. Repeat only to repair a concrete failed criterion.",
       "5. Keep explanations no-code oriented: applications, forms, pages, fields, data sources, roles, permissions, publication, and user-facing behavior.",
       "6. Reply to the user in their language. Keep progress updates short, factual, and user-safe.",
       "",
@@ -2001,13 +2181,17 @@
   }
 
   function resolveProjectIdOption(options) {
-    var id = trim(options.projectId);
+    options = options || {};
+    var id = trim(options.projectId || options.projectName || options.targetProject || options.primaryProject);
     if (id.length) {
       return id;
     }
     try {
       if (context && context.project && context.project.getName) {
-        return String(context.project.getName());
+        var contextProject = String(context.project.getName());
+        if (!/^(ConvertigoAgentBridge|ConvertigoAssistant|ConvertigoMCP)$/.test(contextProject)) {
+          return contextProject;
+        }
       }
     } catch (_ignoreProjectName) {}
     return "";
@@ -2211,6 +2395,203 @@
       C8O.agentBridge._fallbackRegistry = new ConcurrentHashMap();
     }
     return C8O.agentBridge._fallbackRegistry;
+  }
+
+  function getRuntimeUpdateCache() {
+    var store = getServerStore();
+    if (store !== null) {
+      var cache = store.get(RUNTIME_UPDATE_CACHE_KEY);
+      if (cache === null || typeof cache === "undefined") {
+        cache = new ConcurrentHashMap();
+        store.set(RUNTIME_UPDATE_CACHE_KEY, cache);
+      }
+      return cache;
+    }
+    if (!C8O.agentBridge._fallbackRuntimeUpdateCache) {
+      C8O.agentBridge._fallbackRuntimeUpdateCache = new ConcurrentHashMap();
+    }
+    return C8O.agentBridge._fallbackRuntimeUpdateCache;
+  }
+
+  function runtimeUpdateCacheFile(workspaceRoot) {
+    var root = trim(workspaceRoot);
+    return root.length ? new File(childPath(root, "agents"), RUNTIME_UPDATE_CACHE_FILE) : null;
+  }
+
+  function readPersistentRuntimeUpdateCache(workspaceRoot) {
+    var file = runtimeUpdateCacheFile(workspaceRoot);
+    var value = file !== null ? readJsonFile(file) : null;
+    if (value === null || typeof value !== "object") {
+      value = {};
+    }
+    if (value.checks === null || typeof value.checks !== "object") {
+      value.checks = {};
+    }
+    if (value.providers === null || typeof value.providers !== "object") {
+      value.providers = {};
+    }
+    value.version = 2;
+    return {
+      file: file,
+      value: value
+    };
+  }
+
+  function providerDefaultReasoning(provider) {
+    provider = provider || {};
+    var models = provider.models || [];
+    var defaultModel = trim(provider.defaultModel);
+    for (var i = 0; i < models.length; i++) {
+      if (trim(models[i] && models[i].id) === defaultModel) {
+        return trim(models[i] && models[i].defaultReasoning);
+      }
+    }
+    return models.length ? trim(models[0] && models[0].defaultReasoning) : "";
+  }
+
+  function compactProviderSettingsCache(provider) {
+    provider = provider || {};
+    return {
+      cachedAt: now(),
+      defaults: {
+        model: trim(provider.defaultModel),
+        reasoning: providerDefaultReasoning(provider)
+      },
+      models: provider.models || [],
+      reasoningMode: String(provider.reasoningMode || ""),
+      supports: provider.supports || {}
+    };
+  }
+
+  function readPersistentProviderSettingsCache(workspaceRoot, providerId) {
+    try {
+      var persistent = readPersistentRuntimeUpdateCache(workspaceRoot);
+      var cached = persistent.value.providers[normalizeProvider(providerId)];
+      if (cached && cached.models && cached.models.length) {
+        return cached;
+      }
+    } catch (_ignorePersistentProviderSettingsCacheRead) {}
+    return null;
+  }
+
+  function writePersistentProviderSettingsCache(workspaceRoot, providers) {
+    var persistent = readPersistentRuntimeUpdateCache(workspaceRoot);
+    if (persistent.file === null) {
+      return;
+    }
+    var lock = null;
+    try {
+      lock = acquireFileLock(new File(persistent.file.getParentFile(), RUNTIME_UPDATE_CACHE_FILE + ".lock"), 5000);
+      persistent = readPersistentRuntimeUpdateCache(workspaceRoot);
+      providers = providers || [];
+      for (var i = 0; i < providers.length; i++) {
+        var provider = providers[i] || {};
+        var providerId = normalizeProvider(provider.id);
+        if (providerId.length && provider.models && provider.models.length) {
+          persistent.value.providers[providerId] = compactProviderSettingsCache(provider);
+        }
+      }
+      writeTextFile(persistent.file, JSON.stringify(persistent.value, null, 2) + "\n");
+    } catch (_ignorePersistentProviderSettingsCacheWrite) {
+    } finally {
+      if (lock !== null) {
+        lock.release();
+      }
+    }
+  }
+
+  function hydrateProviderSettingsFromCache(workspaceRoot, provider) {
+    provider = provider || {};
+    if (provider.models && provider.models.length) {
+      return provider;
+    }
+    var cached = readPersistentProviderSettingsCache(workspaceRoot, provider.id);
+    if (cached === null) {
+      return provider;
+    }
+    provider.models = cached.models || [];
+    provider.defaultModel = trim(cached.defaults && cached.defaults.model);
+    provider.reasoningMode = String(cached.reasoningMode || provider.reasoningMode || "");
+    provider.supports = cached.supports || provider.supports || {};
+    provider.source = provider.source || {};
+    provider.source.settingsCached = true;
+    provider.source.settingsCachedAt = Number(cached.cachedAt || 0);
+    return provider;
+  }
+
+  function writePersistentRuntimeUpdateCache(workspaceRoot, cacheKey, loaded, nextCheckAt) {
+    var persistent = readPersistentRuntimeUpdateCache(workspaceRoot);
+    if (persistent.file === null) {
+      return;
+    }
+    var lock = null;
+    try {
+      lock = acquireFileLock(new File(persistent.file.getParentFile(), RUNTIME_UPDATE_CACHE_FILE + ".lock"), 5000);
+      persistent = readPersistentRuntimeUpdateCache(workspaceRoot);
+      persistent.value.checks[cacheKey] = {
+        checkedAt: Number(loaded.checkedAt || 0),
+        nextCheckAt: Number(nextCheckAt || 0),
+        result: loaded
+      };
+      writeTextFile(persistent.file, JSON.stringify(persistent.value, null, 2) + "\n");
+    } catch (_ignorePersistentRuntimeUpdateCacheWrite) {
+    } finally {
+      if (lock !== null) {
+        lock.release();
+      }
+    }
+  }
+
+  function readCachedRuntimeUpdate(cacheKey, workspaceRoot) {
+    var cache = getRuntimeUpdateCache();
+    var currentTime = now();
+    try {
+      var cachedText = cache.get(cacheKey);
+      if (cachedText !== null && typeof cachedText !== "undefined") {
+        var cached = parseJsonSafe(String(cachedText), null);
+        if (cached !== null && Number(cached.nextCheckAt || 0) > currentTime) {
+          cached.cached = true;
+          return cached;
+        }
+      }
+    } catch (_ignoreRuntimeUpdateCacheRead) {}
+    try {
+      var persistent = readPersistentRuntimeUpdateCache(workspaceRoot);
+      var stored = persistent.value.checks[cacheKey];
+      if (stored && Number(stored.nextCheckAt || 0) > currentTime && stored.result) {
+        var persisted = stored.result;
+        persisted.checkedAt = Number(stored.checkedAt || persisted.checkedAt || 0);
+        persisted.nextCheckAt = Number(stored.nextCheckAt || 0);
+        persisted.cached = true;
+        cache.put(cacheKey, JSON.stringify(persisted));
+        return persisted;
+      }
+    } catch (_ignorePersistentRuntimeUpdateCacheRead) {}
+    return null;
+  }
+
+  function cachedRuntimeUpdate(key, options, workspaceRoot, loader) {
+    options = options || {};
+    var cache = getRuntimeUpdateCache();
+    var cacheKey = String(key || "");
+    var refresh = boolValue(options.refreshUpdateCheck, false);
+    var cacheMs = intValue(options.updateCheckCacheMs, DEFAULT_RUNTIME_UPDATE_CACHE_MS, 0, 86400000);
+    var currentTime = now();
+    if (!refresh && cacheMs > 0) {
+      var cached = readCachedRuntimeUpdate(cacheKey, workspaceRoot);
+      if (cached !== null) {
+        return cached;
+      }
+    }
+    var loaded = loader();
+    loaded.checkedAt = currentTime;
+    loaded.nextCheckAt = cacheMs > 0 ? currentTime + cacheMs : currentTime;
+    loaded.cached = false;
+    try {
+      cache.put(cacheKey, JSON.stringify(loaded));
+    } catch (_ignoreRuntimeUpdateCacheWrite) {}
+    writePersistentRuntimeUpdateCache(workspaceRoot, cacheKey, loaded, loaded.nextCheckAt);
+    return loaded;
   }
 
   function rememberSessionHandle(handle) {
@@ -2940,6 +3321,14 @@
   }
 
   function runNpmInstall(npm, packageSpec, prefixDir, options, extraEnv) {
+    return runNpmCommand(npm, ["install", "--prefix", prefixDir, packageSpec], {
+      cwd: prefixDir,
+      env: extraEnv || null,
+      timeoutMs: intValue(options.codexInstallTimeoutMs || options.npmInstallTimeoutMs, 600000, 30000, 1800000)
+    });
+  }
+
+  function runNpmCommand(npm, args, options) {
     var npmDir = parentPath(npm.path);
     var paths = npmDir.length ? npmDir : "";
     var normalizedNpmDir = npmDir.replace(/\\/g, "/");
@@ -2949,12 +3338,16 @@
       var nodeBinDir = normalizedNpmDir.substring(0, markerIndex) + "/bin";
       paths = nodeBinDir + (paths.length ? String(File.pathSeparator) + paths : "");
     }
-    var command = toJavaList(["npm", "install", "--prefix", prefixDir, packageSpec]);
+    var commandArgs = ["npm"];
+    for (var i = 0; i < args.length; i++) {
+      commandArgs.push(String(args[i]));
+    }
+    var command = toJavaList(commandArgs);
     var pb = ProcessUtils.getNpmProcessBuilder(paths, command);
     return runProcessBuilder(pb, {
-      cwd: prefixDir,
-      env: extraEnv || null,
-      timeoutMs: intValue(options.codexInstallTimeoutMs || options.npmInstallTimeoutMs, 600000, 30000, 1800000)
+      cwd: options && options.cwd ? options.cwd : null,
+      env: options && options.env ? options.env : null,
+      timeoutMs: options && options.timeoutMs ? options.timeoutMs : 15000
     });
   }
 
@@ -3167,6 +3560,87 @@
       version: "",
       attempts: attempts
     };
+  }
+
+  function existingCommandFile(candidate) {
+    var value = trim(candidate);
+    if (!value.length) {
+      return null;
+    }
+    var file = new File(value);
+    if (file.isFile()) {
+      return file;
+    }
+    if (!isWindows() || /\.[A-Za-z0-9]+$/.test(value)) {
+      return null;
+    }
+    var extensions = [".exe", ".cmd", ".bat"];
+    for (var i = 0; i < extensions.length; i++) {
+      file = new File(value + extensions[i]);
+      if (file.isFile()) {
+        return file;
+      }
+    }
+    return null;
+  }
+
+  function firstExistingCommand(candidates, extraPath) {
+    var search = [];
+    var seen = {};
+    var add = function (value) {
+      var candidate = trim(value);
+      if (candidate.length && !seen[candidate]) {
+        seen[candidate] = true;
+        search.push(candidate);
+      }
+    };
+    candidates = candidates || [];
+    for (var i = 0; i < candidates.length; i++) {
+      var candidate = trim(candidates[i]);
+      if (!candidate.length) {
+        continue;
+      }
+      if (candidate.indexOf("/") >= 0 || candidate.indexOf("\\") >= 0 || new File(candidate).isAbsolute()) {
+        add(candidate);
+        continue;
+      }
+      var pathValue = trim(extraPath);
+      var systemPath = String(System.getenv("PATH") || "");
+      pathValue = pathValue.length ? pathValue + String(File.pathSeparator) + systemPath : systemPath;
+      var directories = pathValue.split(String(File.pathSeparator));
+      for (var p = 0; p < directories.length; p++) {
+        if (trim(directories[p]).length) {
+          add(childPath(directories[p], candidate));
+        }
+      }
+    }
+    for (var j = 0; j < search.length; j++) {
+      var file = existingCommandFile(search[j]);
+      if (file !== null) {
+        return {
+          found: true,
+          path: filePath(file),
+          version: "",
+          attempts: []
+        };
+      }
+    }
+    return {
+      found: false,
+      path: "",
+      version: "",
+      attempts: []
+    };
+  }
+
+  function installedNpmPackageVersion(installDir, packageName) {
+    try {
+      var packageFile = new File(childPath(childPath(codexNodeModulesPath(installDir), packageName), "package.json"));
+      var descriptor = readJsonFile(packageFile);
+      return descriptor && descriptor.version ? extractRuntimeVersion(descriptor.version) : "";
+    } catch (_ignoreInstalledNpmPackageVersion) {
+      return "";
+    }
   }
 
   function inspectVibeConfig(file) {
@@ -3404,6 +3878,120 @@
     };
   }
 
+  function inspectCodexMcpConfig(codexHome) {
+    var result = {
+      checked: true,
+      ok: false,
+      hasConvertigo: false,
+      hasPlaywright: false,
+      stdout: "",
+      stderr: "",
+      error: ""
+    };
+    try {
+      var configFile = new File(codexHome, "config.toml");
+      if (!configFile.isFile()) {
+        result.error = "config.toml not found";
+        return result;
+      }
+      var text = readTextFile(configFile).toLowerCase();
+      result.hasConvertigo = text.indexOf("convertigo") >= 0 && text.indexOf("mcp") >= 0;
+      result.hasPlaywright = text.indexOf("playwright") >= 0 && text.indexOf("mcp") >= 0;
+      result.ok = result.hasConvertigo;
+    } catch (error) {
+      result.error = String(error);
+    }
+    return result;
+  }
+
+  function detectCodexRuntimePresence(options) {
+    options = options || {};
+    var workspaceRoot = resolveWorkspaceRoot(options);
+    var installDir = normalizeDirectory(options.installDir, childPath(workspaceRoot, "agents/codex"), workspaceRoot);
+    var codexHome = resolveCodexHome(options, installDir);
+    var userHome = String(System.getProperty("user.home"));
+    var command = firstExistingCommand([
+      trim(options.codexPath || options.commandPath),
+      codexLocalBin(installDir),
+      "/Applications/Codex.app/Contents/Resources/codex",
+      childPath(childPath(userHome, ".local"), "bin/codex"),
+      "/opt/homebrew/bin/codex",
+      "/usr/local/bin/codex",
+      "codex"
+    ], nodeRuntimeSearchPath(options));
+    if (command.found && commandPathStartsWith(command, installDir)) {
+      var version = installedNpmPackageVersion(installDir, npmPackageNameFromSpec(codexPackageSpec(options)));
+      command.version = version.length ? "codex-cli " + version : "";
+    }
+    return {
+      workspaceRoot: workspaceRoot,
+      installDir: installDir,
+      codexHome: codexHome.path,
+      home: publicHomeInfo(codexHome),
+      mcpEndpoint: resolveMcpEndpoint(options),
+      codex: command,
+      playwright: {
+        installed: new File(childPath(codexNodeModulesPath(installDir), "@playwright/mcp/package.json")).isFile()
+      },
+      mcp: inspectCodexMcpConfig(codexHome.path)
+    };
+  }
+
+  function detectRuntimePresence(options) {
+    options = options || {};
+    var workspaceRoot = resolveWorkspaceRoot(options);
+    var installDir = normalizeDirectory(options.installDir, childPath(workspaceRoot, "agents/vibe"), workspaceRoot);
+    var venvDir = childPath(installDir, ".venv");
+    var vibeHomeInfo = resolveVibeHome(options, installDir);
+    var vibeHome = vibeHomeInfo.path;
+    var userHome = String(System.getProperty("user.home"));
+    var homeLocalBin = childPath(userHome, ".local/bin");
+    return {
+      workspaceRoot: workspaceRoot,
+      installDir: installDir,
+      venvDir: venvDir,
+      vibeHome: vibeHome,
+      home: publicHomeInfo(vibeHomeInfo),
+      mcpEndpoint: resolveMcpEndpoint(options),
+      model: vibeModelSpec(options.model || options.agentModel).activeModel,
+      python: firstExistingCommand([
+        venvBinPath(venvDir, "python"),
+        childPath(homeLocalBin, "python3"),
+        childPath(homeLocalBin, "python"),
+        "python3",
+        "python"
+      ], ""),
+      pythonRuntime: {},
+      uv: firstExistingCommand([
+        venvBinPath(venvDir, "uv"),
+        childPath(homeLocalBin, "uv"),
+        "uv"
+      ], ""),
+      vibe: firstExistingCommand([
+        venvBinPath(venvDir, "vibe"),
+        childPath(homeLocalBin, "vibe"),
+        "vibe"
+      ], ""),
+      vibeAcp: firstExistingCommand([
+        venvBinPath(venvDir, "vibe-acp"),
+        childPath(homeLocalBin, "vibe-acp"),
+        "vibe-acp"
+      ], ""),
+      config: {
+        selected: vibeHome.length ? inspectVibeConfig(new File(vibeHome, "config.toml")) : {
+          path: "",
+          exists: false,
+          hasMcpServers: false,
+          hasConvertigoServer: false,
+          hasHttpTransport: false,
+          endpoint: "",
+          valid: false
+        },
+        user: inspectVibeConfig(new File(new File(userHome, ".vibe"), "config.toml"))
+      }
+    };
+  }
+
   function codexRuntimeEnv(options, codexHomePath) {
     var env = {};
     options = options || {};
@@ -3593,13 +4181,169 @@
     };
   }
 
+  function extractRuntimeVersion(value) {
+    var match = String(value || "").match(/(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?)/);
+    return match ? match[1] : "";
+  }
+
+  function compareRuntimeVersions(left, right) {
+    var leftVersion = extractRuntimeVersion(left);
+    var rightVersion = extractRuntimeVersion(right);
+    if (!leftVersion.length || !rightVersion.length) {
+      return 0;
+    }
+    var leftCore = leftVersion.split(/[+-]/)[0].split(".");
+    var rightCore = rightVersion.split(/[+-]/)[0].split(".");
+    var length = Math.max(leftCore.length, rightCore.length);
+    for (var i = 0; i < length; i++) {
+      var leftPart = parseInt(leftCore[i] || "0", 10);
+      var rightPart = parseInt(rightCore[i] || "0", 10);
+      if (leftPart < rightPart) {
+        return -1;
+      }
+      if (leftPart > rightPart) {
+        return 1;
+      }
+    }
+    var leftPrerelease = leftVersion.indexOf("-") >= 0;
+    var rightPrerelease = rightVersion.indexOf("-") >= 0;
+    if (leftPrerelease !== rightPrerelease) {
+      return leftPrerelease ? -1 : 1;
+    }
+    return 0;
+  }
+
+  function runtimeUpdateStatus(provider, command, latest, source) {
+    command = command || {};
+    latest = latest || {};
+    var installedVersion = extractRuntimeVersion(command.version);
+    var latestVersion = extractRuntimeVersion(latest.latestVersion);
+    return {
+      provider: provider,
+      installed: command.found === true,
+      managed: command.found === true && latest.managedPathPrefix && commandPathStartsWith(command, latest.managedPathPrefix),
+      path: String(command.path || ""),
+      installedVersion: installedVersion,
+      latestVersion: latestVersion,
+      checked: latest.checked === true,
+      cached: latest.cached === true,
+      updateAvailable: installedVersion.length > 0 && latestVersion.length > 0 && compareRuntimeVersions(installedVersion, latestVersion) < 0,
+      source: source,
+      error: String(latest.error || ""),
+      checkedAt: Number(latest.checkedAt || 0),
+      nextCheckAt: Number(latest.nextCheckAt || 0)
+    };
+  }
+
+  function codexLatestVersion(options, setup) {
+    options = options || {};
+    if (!setup.codex || setup.codex.found !== true) {
+      return {
+        checked: false,
+        latestVersion: "",
+        error: "",
+        checkedAt: 0,
+        managedPathPrefix: String(setup.installDir || "")
+      };
+    }
+    var packageName = npmPackageNameFromSpec(codexPackageSpec(options));
+    var cacheKey = "codex:" + packageName;
+    if (!boolValue(options.checkUpdates, false)) {
+      var cachedLatest = readCachedRuntimeUpdate(cacheKey, setup.workspaceRoot);
+      if (cachedLatest !== null) {
+        cachedLatest.managedPathPrefix = String(setup.installDir || "");
+        return cachedLatest;
+      }
+      return {
+        checked: false,
+        latestVersion: "",
+        error: "",
+        checkedAt: 0,
+        managedPathPrefix: String(setup.installDir || "")
+      };
+    }
+    var latest = cachedRuntimeUpdate(cacheKey, options, setup.workspaceRoot, function () {
+      var npmRuntime = detectNpmRuntime(options);
+      if (!npmRuntime.npm.found) {
+        return {
+          checked: true,
+          latestVersion: "",
+          error: "npm not found"
+        };
+      }
+      var probe = runNpmCommand(npmRuntime.npm, ["view", packageName, "version", "--json"], {
+        timeoutMs: intValue(options.updateCheckTimeoutMs, 20000, 1000, 120000)
+      });
+      var parsed = parseJsonSafe(probe.stdout, "");
+      var value = typeof parsed === "string" ? parsed : probe.stdout;
+      return {
+        checked: true,
+        latestVersion: extractRuntimeVersion(value),
+        error: probe.ok ? "" : String(probe.stderr || probe.error || "npm version check failed")
+      };
+    });
+    latest.managedPathPrefix = String(setup.installDir || "");
+    return latest;
+  }
+
+  function vibeLatestVersion(options, setup) {
+    options = options || {};
+    if (!setup.vibe || setup.vibe.found !== true) {
+      return {
+        checked: false,
+        latestVersion: "",
+        error: "",
+        checkedAt: 0,
+        managedPathPrefix: String(setup.venvDir || "")
+      };
+    }
+    var cacheKey = "vibe:mistral-vibe";
+    if (!boolValue(options.checkUpdates, false)) {
+      var cachedLatest = readCachedRuntimeUpdate(cacheKey, setup.workspaceRoot);
+      if (cachedLatest !== null) {
+        cachedLatest.managedPathPrefix = String(setup.venvDir || "");
+        return cachedLatest;
+      }
+      return {
+        checked: false,
+        latestVersion: "",
+        error: "",
+        checkedAt: 0,
+        managedPathPrefix: String(setup.venvDir || "")
+      };
+    }
+    var latest = cachedRuntimeUpdate(cacheKey, options, setup.workspaceRoot, function () {
+      if (!setup.python || !setup.python.found) {
+        return {
+          checked: true,
+          latestVersion: "",
+          error: "Python not found"
+        };
+      }
+      var probe = runCommandCaptured([setup.python.path, "-m", "pip", "index", "versions", "mistral-vibe"], {
+        timeoutMs: intValue(options.updateCheckTimeoutMs, 20000, 1000, 120000)
+      });
+      var text = String((probe.stdout || "") + "\n" + (probe.stderr || ""));
+      var match = text.match(/mistral-vibe\s*\(([^)]+)\)/i) || text.match(/Available versions:\s*([^\s,]+)/i);
+      return {
+        checked: true,
+        latestVersion: match ? extractRuntimeVersion(match[1]) : "",
+        error: probe.ok ? "" : String(probe.stderr || probe.error || "PyPI version check failed")
+      };
+    });
+    latest.managedPathPrefix = String(setup.venvDir || "");
+    return latest;
+  }
+
   function codexSettings(options) {
     options = optionsWithRequestFallbacks(options);
-    var setup = detectCodexRuntime(options);
+    var presenceOnly = boolValue(options.runtimePresenceOnly, false);
+    var setup = presenceOnly ? detectCodexRuntimePresence(options) : detectCodexRuntime(options);
+    var runtime = runtimeUpdateStatus("codex", setup.codex, codexLatestVersion(options, setup), "npm");
     var source = {
-      type: "cli",
-      command: setup.codex.found ? setup.codex.path + " debug models" : "codex debug models",
-      ok: false,
+      type: presenceOnly ? "presence" : "cli",
+      command: presenceOnly ? String(setup.codex.path || "") : (setup.codex.found ? setup.codex.path + " debug models" : "codex debug models"),
+      ok: presenceOnly && setup.codex.found === true,
       exitCode: -1,
       error: "",
       stderr: ""
@@ -3607,7 +4351,7 @@
     var models = [];
     var bootstrap = null;
     var skills = null;
-    if (setup.codex.found) {
+    if (setup.codex.found && !presenceOnly) {
       try {
         if (trim(setup.codexHome).length) {
           bootstrap = bootstrapCodexHome(options, setup.codexHome, resolveMcpEndpoint(options));
@@ -3626,7 +4370,7 @@
       if (probe.ok) {
         models = normalizeCodexModelCatalog(parseJsonSafe(probe.stdout, {}));
       }
-    } else {
+    } else if (!setup.codex.found) {
       source.error = "Codex CLI not found";
     }
     var defaultModel = models.length ? models[0].id : "";
@@ -3635,6 +4379,7 @@
       label: "Codex",
       status: setup.codex.found ? "ready" : "missing",
       ready: setup.codex.found === true,
+      runtime: runtime,
       setup: compactCodexSetup(setup),
       bootstrap: bootstrap,
       skills: skills,
@@ -3703,7 +4448,8 @@
 
   function vibeSettings(options) {
     options = optionsWithRequestFallbacks(options);
-    var setup = detectRuntime(options);
+    var setup = boolValue(options.runtimePresenceOnly, false) ? detectRuntimePresence(options) : detectRuntime(options);
+    var runtime = runtimeUpdateStatus("vibe", setup.vibe, vibeLatestVersion(options, setup), "pypi");
     var selectedFile = setup.vibeHome.length ? new File(setup.vibeHome, "config.toml") : null;
     var selected = selectedFile !== null ? parseVibeModelsFromConfig(selectedFile) : { path: "", exists: false, activeModel: "", models: [] };
     var user = parseVibeModelsFromConfig(new File(new File(String(System.getProperty("user.home")), ".vibe"), "config.toml"));
@@ -3732,6 +4478,7 @@
       label: "Vibe",
       status: setup.vibe.found && setup.vibeAcp.found ? "ready" : "missing",
       ready: setup.vibe.found === true && setup.vibeAcp.found === true,
+      runtime: runtime,
       setup: compactVibeSetup(setup),
       source: {
         type: config.exists ? "config" : "fallback",
@@ -3753,8 +4500,426 @@
     };
   }
 
+  function canonicalFilePath(file) {
+    if (file === null || typeof file === "undefined") {
+      return "";
+    }
+    try {
+      return String(file.getCanonicalPath());
+    } catch (_ignoreCanonicalPath) {
+      return filePath(file);
+    }
+  }
+
+  function deleteDirectoryTree(file, removed, errors, nested) {
+    if (file === null || !file.exists()) {
+      return true;
+    }
+    if (file.isDirectory()) {
+      var children = file.listFiles();
+      if (children !== null) {
+        for (var i = 0; i < children.length; i++) {
+          if (!deleteDirectoryTree(children[i], removed, errors, true)) {
+            return false;
+          }
+        }
+      }
+    }
+    try {
+      if (file["delete"]()) {
+        if (nested !== true) {
+          removed.push(filePath(file));
+        }
+        return true;
+      }
+    } catch (e) {
+      errors.push({ path: filePath(file), error: String(e) });
+      return false;
+    }
+    errors.push({ path: filePath(file), error: "delete returned false" });
+    return false;
+  }
+
+  function removeDirectoryWhenEmpty(file, removed) {
+    try {
+      if (file !== null && file.isDirectory()) {
+        var children = file.listFiles();
+        if (children !== null && children.length === 0 && file["delete"]()) {
+          removed.push(filePath(file));
+        }
+      }
+    } catch (_ignoreRemoveEmptyDirectory) {}
+  }
+
+  function homeContainerPath(value) {
+    var raw = trim(value);
+    if (!raw.length) {
+      return "";
+    }
+    var path = canonicalFilePath(new File(raw));
+    if (!path.length) {
+      return "";
+    }
+    var file = new File(path);
+    var name = String(file.getName());
+    if (name === "codex-home" || name === ".codex-home") {
+      return canonicalFilePath(file.getParentFile());
+    }
+    return path;
+  }
+
+  function addProtectedHome(paths, value) {
+    var path = homeContainerPath(value);
+    if (path.length) {
+      paths[path] = true;
+    }
+  }
+
+  function homeContainsReferencedSession(file, sessionIds, depth) {
+    if (file === null || !file.exists() || depth > 10) {
+      return false;
+    }
+    if (file.isFile()) {
+      var name = String(file.getName());
+      for (var sessionId in sessionIds) {
+        if (Object.prototype.hasOwnProperty.call(sessionIds, sessionId) && name.indexOf(sessionId) >= 0) {
+          return true;
+        }
+      }
+      return false;
+    }
+    var children = file.listFiles();
+    if (children === null) {
+      return false;
+    }
+    for (var i = 0; i < children.length; i++) {
+      if (homeContainsReferencedSession(children[i], sessionIds, depth + 1)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function activeAgentStorageReferences(workspaceRoot) {
+    var references = {
+      conversationIds: {},
+      homePaths: {},
+      sessionIds: {},
+      tombstones: []
+    };
+    var providers = ["codex", "vibe"];
+    for (var providerIndex = 0; providerIndex < providers.length; providerIndex++) {
+      var provider = providers[providerIndex];
+      var usersRoot = new File(new File(new File(workspaceRoot, "agents"), provider), "users");
+      if (!usersRoot.isDirectory()) {
+        continue;
+      }
+      var userDirs = usersRoot.listFiles();
+      if (userDirs === null) {
+        continue;
+      }
+      for (var userIndex = 0; userIndex < userDirs.length; userIndex++) {
+        var userDir = userDirs[userIndex];
+        var conversationsDir = new File(userDir, "conversations");
+        if (!conversationsDir.isDirectory()) {
+          continue;
+        }
+        var conversationDirs = conversationsDir.listFiles();
+        if (conversationDirs === null) {
+          continue;
+        }
+        for (var conversationIndex = 0; conversationIndex < conversationDirs.length; conversationIndex++) {
+          var conversationDir = conversationDirs[conversationIndex];
+          var record = readJsonFile(new File(conversationDir, "conversation.json"));
+          if (record === null) {
+            continue;
+          }
+          if (record.deleted === true || trim(record.status).toLowerCase() === "deleted") {
+            references.tombstones.push({
+              dir: conversationDir,
+              updatedAt: Number(record.updatedAt || record.createdAt || conversationDir.lastModified() || 0)
+            });
+            continue;
+          }
+          var conversationId = trim(record.conversationId || record.threadid || conversationDir.getName());
+          if (conversationId.length) {
+            references.conversationIds[conversationId] = true;
+          }
+          var externalSessionId = trim(record.externalSessionId || record.codexThreadId || record.sessionId);
+          if (externalSessionId.length) {
+            references.sessionIds[externalSessionId] = true;
+          }
+          if (provider === "codex" && conversationId.length) {
+            var expected = new File(
+              new File(
+                new File(
+                  new File(
+                    new File(workspaceRoot, "agents/codex"),
+                    "homes/users"
+                  ),
+                  userDir.getName()
+                ),
+                "conversations"
+              ),
+              stableId("conversation", conversationId)
+            );
+            addProtectedHome(references.homePaths, expected);
+          }
+          addProtectedHome(references.homePaths, record.codexHome || record.agentHome || "");
+        }
+      }
+    }
+
+    var registry = getRegistry();
+    var iterator = registry.keySet().iterator();
+    while (iterator.hasNext()) {
+      var handle = String(iterator.next());
+      var entry = registry.get(handle);
+      if (entry && processAlive(entry.process)) {
+        references.conversationIds[trim(entry.conversationId || handle)] = true;
+        if (entry.home && entry.home.path) {
+          addProtectedHome(references.homePaths, entry.home.path);
+        }
+      }
+    }
+
+    var pidDir = codexPidRegistryDir(workspaceRoot);
+    if (pidDir !== null && pidDir.isDirectory()) {
+      var pidFiles = pidDir.listFiles();
+      if (pidFiles !== null) {
+        for (var pidIndex = 0; pidIndex < pidFiles.length; pidIndex++) {
+          var pidFile = pidFiles[pidIndex];
+          var pidRecord = readJsonFile(pidFile);
+          var pid = pidRecord === null ? 0 : Number(pidRecord.pid || 0);
+          if (pid > 0 && processHandleAlive(pid)) {
+            references.conversationIds[trim(pidRecord.handle)] = true;
+            addProtectedHome(references.homePaths, pidRecord.codexHome || "");
+          } else {
+            try { pidFile["delete"](); } catch (_ignoreDeadCleanupPidFile) {}
+          }
+        }
+      }
+    }
+    return references;
+  }
+
+  function cleanupConversationArtifacts(options, report) {
+    var workspaceRoot = resolveWorkspaceRoot(options);
+    var conversationId = trim(options.conversationId || options.threadid || options.handle);
+    var handle = trim(options.handle || conversationId);
+    var externalSessionId = trim(options.externalSessionId || options.codexThreadId || options.sessionId);
+    var registry = getRegistry();
+    var entry = handle.length ? registry.get(handle) : null;
+    if (entry !== null && typeof entry !== "undefined") {
+      stopEntry(entry, true);
+    }
+
+    if (handle.length) {
+      var pidFile = codexPidFile(workspaceRoot, handle);
+      if (pidFile !== null && pidFile.isFile()) {
+        var pidRecord = readJsonFile(pidFile);
+        var pid = pidRecord === null ? 0 : Number(pidRecord.pid || 0);
+        if (pid > 0 && processHandleAlive(pid)) {
+          destroyPidTree(pid);
+        }
+        deleteDirectoryTree(pidFile, report.removed, report.errors);
+      }
+    }
+
+    var leaseFile = viewerDebugPortLeaseFile({
+      workspaceRoot: workspaceRoot,
+      conversationId: conversationId
+    });
+    if (leaseFile !== null) {
+      deleteDirectoryTree(leaseFile, report.removed, report.errors);
+    }
+
+    var userSlugs = {};
+    var hasUserSlug = false;
+    var userId = trim(options.userId);
+    if (userId.length) {
+      userSlugs[userPathSlug(userId)] = true;
+      hasUserSlug = true;
+    }
+    var explicitUserKey = trim(options.userKey);
+    if (explicitUserKey.length) {
+      userSlugs[safePathPart(explicitUserKey)] = true;
+      hasUserSlug = true;
+    }
+    if (!hasUserSlug) {
+      userSlugs.studio = true;
+    }
+    var sessionIds = {};
+    if (externalSessionId.length) {
+      sessionIds[externalSessionId] = true;
+    }
+
+    for (var userSlug in userSlugs) {
+      if (!Object.prototype.hasOwnProperty.call(userSlugs, userSlug)) {
+        continue;
+      }
+      var conversationsRoot = new File(
+        new File(
+          new File(
+            new File(workspaceRoot, "agents/codex"),
+            "homes/users"
+          ),
+          userSlug
+        ),
+        "conversations"
+      );
+      if (!conversationsRoot.isDirectory()) {
+        continue;
+      }
+      var homes = conversationsRoot.listFiles();
+      if (homes === null) {
+        continue;
+      }
+      var expectedName = conversationId.length ? stableId("conversation", conversationId) : "";
+      for (var homeIndex = 0; homeIndex < homes.length; homeIndex++) {
+        var home = homes[homeIndex];
+        var matchesConversation = expectedName.length && String(home.getName()) === expectedName;
+        var matchesSession = externalSessionId.length && homeContainsReferencedSession(home, sessionIds, 0);
+        if (matchesConversation || matchesSession) {
+          deleteDirectoryTree(home, report.removed, report.errors);
+        }
+      }
+      removeDirectoryWhenEmpty(conversationsRoot, report.removed);
+    }
+  }
+
+  function cleanupOrphanedAgentStorage(options, report) {
+    var workspaceRoot = resolveWorkspaceRoot(options);
+    var current = now();
+    var graceMs = intValue(
+      options.orphanGraceSeconds,
+      Math.floor(DEFAULT_STORAGE_ORPHAN_GRACE_MS / 1000),
+      300,
+      2592000
+    ) * 1000;
+    var references = activeAgentStorageReferences(workspaceRoot);
+    var homesUsersRoot = new File(
+      new File(
+        new File(
+          new File(workspaceRoot, "agents"),
+          "codex"
+        ),
+        "homes"
+      ),
+      "users"
+    );
+    if (homesUsersRoot.isDirectory()) {
+      var users = homesUsersRoot.listFiles();
+      if (users !== null) {
+        for (var userIndex = 0; userIndex < users.length; userIndex++) {
+          var conversationsRoot = new File(users[userIndex], "conversations");
+          if (!conversationsRoot.isDirectory()) {
+            continue;
+          }
+          var homes = conversationsRoot.listFiles();
+          if (homes === null) {
+            continue;
+          }
+          for (var homeIndex = 0; homeIndex < homes.length; homeIndex++) {
+            var home = homes[homeIndex];
+            var homePath = canonicalFilePath(home);
+            var protectedHome = references.homePaths[homePath] === true ||
+              homeContainsReferencedSession(home, references.sessionIds, 0);
+            var age = current - Number(home.lastModified() || 0);
+            if (!protectedHome && age >= graceMs) {
+              deleteDirectoryTree(home, report.removed, report.errors);
+            } else {
+              report.kept.push({
+                path: filePath(home),
+                reason: protectedHome ? "referenced" : "grace",
+                ageMs: age
+              });
+            }
+          }
+          removeDirectoryWhenEmpty(conversationsRoot, report.removed);
+        }
+      }
+    }
+
+    for (var tombstoneIndex = 0; tombstoneIndex < references.tombstones.length; tombstoneIndex++) {
+      var tombstone = references.tombstones[tombstoneIndex];
+      if (current - tombstone.updatedAt >= graceMs) {
+        deleteDirectoryTree(tombstone.dir, report.removed, report.errors);
+      }
+    }
+
+    var leasesDir = new File(new File(new File(workspaceRoot, "agents"), "codex"), "viewer-debug-ports");
+    if (leasesDir.isDirectory()) {
+      var leases = leasesDir.listFiles();
+      if (leases !== null) {
+        for (var leaseIndex = 0; leaseIndex < leases.length; leaseIndex++) {
+          var leaseFile = leases[leaseIndex];
+          var lease = readJsonFile(leaseFile);
+          var leaseConversationId = trim(lease && lease.conversationId);
+          var leaseAge = current - Number((lease && lease.createdAt) || leaseFile.lastModified() || 0);
+          if (references.conversationIds[leaseConversationId] !== true && leaseAge >= graceMs) {
+            deleteDirectoryTree(leaseFile, report.removed, report.errors);
+          }
+        }
+      }
+      removeDirectoryWhenEmpty(leasesDir, report.removed);
+    }
+  }
+
+  C8O.agentBridge.cleanupStorage = function (options) {
+    options = optionsWithRequestFallbacks(options || {});
+    var workspaceRoot = resolveWorkspaceRoot(options);
+    var report = {
+      ok: true,
+      status: "cleaned",
+      workspaceRoot: workspaceRoot,
+      removed: [],
+      kept: [],
+      errors: [],
+      timestamp: now()
+    };
+    var exactConversation = trim(options.conversationId || options.threadid || options.handle).length > 0;
+    var force = boolValue(options.force, exactConversation);
+    var intervalMs = intValue(
+      options.intervalSeconds,
+      Math.floor(DEFAULT_STORAGE_CLEANUP_INTERVAL_MS / 1000),
+      300,
+      2592000
+    ) * 1000;
+    var marker = new File(new File(new File(workspaceRoot, "agents"), "codex"), STORAGE_CLEANUP_FILE);
+    if (!exactConversation && !force) {
+      var markerState = readJsonFile(marker);
+      var nextCleanupAt = markerState === null ? 0 : Number(markerState.nextCleanupAt || 0);
+      if (nextCleanupAt > report.timestamp) {
+        report.status = "skipped";
+        report.nextCleanupAt = nextCleanupAt;
+        return report;
+      }
+    }
+    if (exactConversation) {
+      cleanupConversationArtifacts(options, report);
+    } else {
+      cleanupOrphanedAgentStorage(options, report);
+      try {
+        writeJsonFile(marker, {
+          lastCleanupAt: report.timestamp,
+          nextCleanupAt: report.timestamp + intervalMs,
+          removedCount: report.removed.length,
+          errorCount: report.errors.length
+        });
+        report.nextCleanupAt = report.timestamp + intervalMs;
+      } catch (markerError) {
+        report.errors.push({ path: filePath(marker), error: String(markerError) });
+      }
+    }
+    report.ok = report.errors.length === 0;
+    report.status = report.ok ? "cleaned" : "partial";
+    return report;
+  };
+
   C8O.agentBridge.settings = function (options) {
     options = optionsWithRequestFallbacks(options);
+    var presenceOnly = boolValue(options.runtimePresenceOnly, false);
     var rawProvider = trim(options.provider || options.agent || "").toLowerCase();
     var provider = (!rawProvider.length || rawProvider === "all" || rawProvider === "*" || rawProvider === "any") ? "" : normalizeProvider(rawProvider);
     var providers = [];
@@ -3763,6 +4928,22 @@
     }
     if (!provider.length || provider === "vibe") {
       providers.push(vibeSettings(options));
+    }
+    var settingsWorkspaceRoot = trim(options.workspaceRoot);
+    if (!settingsWorkspaceRoot.length) {
+      for (var workspaceIndex = 0; workspaceIndex < providers.length; workspaceIndex++) {
+        settingsWorkspaceRoot = trim(providers[workspaceIndex] && providers[workspaceIndex].setup && providers[workspaceIndex].setup.workspaceRoot);
+        if (settingsWorkspaceRoot.length) {
+          break;
+        }
+      }
+    }
+    if (presenceOnly) {
+      for (var cachedProviderIndex = 0; cachedProviderIndex < providers.length; cachedProviderIndex++) {
+        providers[cachedProviderIndex] = hydrateProviderSettingsFromCache(settingsWorkspaceRoot, providers[cachedProviderIndex]);
+      }
+    } else {
+      writePersistentProviderSettingsCache(settingsWorkspaceRoot, providers);
     }
     var defaultProvider = providers.length ? providers[0] : null;
     for (var i = 0; i < providers.length; i++) {
@@ -3776,14 +4957,23 @@
       model: defaultProvider !== null ? defaultProvider.defaultModel : "",
       reasoning: ""
     };
-    if (defaultProvider !== null && defaultProvider.models.length) {
-      defaults.reasoning = defaultProvider.models[0].defaultReasoning || "";
+    if (defaultProvider !== null) {
+      defaults.reasoning = providerDefaultReasoning(defaultProvider);
     }
+    var storageCleanup = C8O.agentBridge.cleanupStorage({
+      workspaceRoot: settingsWorkspaceRoot
+    });
     return {
       ok: providers.length > 0,
       status: providers.length ? "ready" : "empty",
       defaults: defaults,
       providers: providers,
+      storageCleanup: {
+        status: storageCleanup.status,
+        removedCount: storageCleanup.removed.length,
+        errorCount: storageCleanup.errors.length,
+        nextCleanupAt: storageCleanup.nextCleanupAt || 0
+      },
       timestamp: now()
     };
   };
@@ -4525,6 +5715,7 @@
       envKeys: entry.envKeys,
       convertigoRevealMode: entry.convertigoRevealMode === true,
       browserDebugUrl: entry.browserDebugUrl || "",
+      viewerDebugPort: Number(entry.viewerDebugPort || 0),
       playwrightCdpEndpoint: entry.playwrightCdpEndpoint || entry.viewerCdpEndpoint || "",
       home: entry.home,
       credentials: {

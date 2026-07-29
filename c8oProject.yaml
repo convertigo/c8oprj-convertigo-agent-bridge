@@ -4,8 +4,9 @@
   contextTimeout: 59
   corsOrigin: =Origin
   httpSessionTimeout: 600
-  version: 0.2.12
+  version: 0.2.13
   ↓void [connectors.SqlConnector]: 🗏 connectors/void.yaml
+  ↓agent_cleanup_storage [sequences.GenericSequence]: 🗏 sequences/agent_cleanup_storage.yaml
   ↓agent_codex_close [sequences.GenericSequence]: 🗏 sequences/agent_codex_close.yaml
   ↓agent_codex_prompt [sequences.GenericSequence]: 🗏 sequences/agent_codex_prompt.yaml
   ↓agent_codex_setup [sequences.GenericSequence]: 🗏 sequences/agent_codex_setup.yaml

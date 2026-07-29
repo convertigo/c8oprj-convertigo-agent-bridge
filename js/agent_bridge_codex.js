@@ -1522,6 +1522,23 @@
 
   C8O.agentBridge.codexStart = function (options) {
     options = optionsWithRequestFallbacks(options || {});
+    try {
+      ensureManagedViewerDebugPort(options);
+    } catch (viewerDebugPortError) {
+      return {
+        ok: false,
+        status: "error",
+        phase: "viewer_debug_port",
+        error: String(viewerDebugPortError),
+        timestamp: now()
+      };
+    }
+    if (intValue(options.viewerDebugPort, 0, 0, 65535) >= 1024) {
+      options.codexHome = "";
+      options.agentHome = "";
+      options.codexHomeScope = "conversation";
+      options.homeScope = "conversation";
+    }
     var handle = trim(options.handle) || makeHandle("codex");
     var registry = getRegistry();
     var existing = registry.get(handle);
@@ -1589,6 +1606,7 @@
       browserDevToolsWebSocketUrl: options.browserDevToolsWebSocketUrl,
       playwrightCdpEndpoint: options.playwrightCdpEndpoint || options.viewerCdpEndpoint,
       playwrightMcpEndpoint: options.playwrightMcpEndpoint,
+      viewerDebugPort: options.viewerDebugPort,
       agentRevealMode: firstDefinedOption(options, ["agentRevealMode", "convertigoRevealMode", "uiRevealMode", "revealMode", "reveal"]),
       mcpSkillsSourceDir: options.mcpSkillsSourceDir || options.skillsSourceDir || options.convertigoMcpDir,
       skipSkillsInstall: options.skipSkillsInstall || options.skipSkillSync,
@@ -1645,6 +1663,8 @@
     entry.assistantContext = trim(options.assistantContext);
     entry.assistantSurface = trim(options.assistantSurface);
     entry.userId = trim(options.userId);
+    entry.conversationId = trim(options.conversationId || options.threadid || (setup.setup.home && setup.setup.home.conversationId));
+    entry.projectId = trim(options.projectId || options.projectName || options.targetProject || (setup.setup.home && setup.setup.home.projectId));
     entry.nocodeMcpTokenHandle = trim(options.nocodeMcpTokenHandle || options.noCodeMcpTokenHandle || options.mcpBearerTokenHandle);
     entry.noCodeMcpTokenHandle = trim(options.noCodeMcpTokenHandle);
     entry.mcpBearerTokenHandle = trim(options.mcpBearerTokenHandle);
@@ -1652,6 +1672,7 @@
     entry.browserDebugUrl = trim(options.browserDebugUrl);
     entry.browserDevToolsJsonUrl = trim(options.browserDevToolsJsonUrl);
     entry.browserDevToolsWebSocketUrl = trim(options.browserDevToolsWebSocketUrl);
+    entry.viewerDebugPort = intValue(options.viewerDebugPort, 0, 0, 65535);
     entry.playwrightCdpEndpoint = resolvePlaywrightMcpCdpEndpoint(options);
     entry.viewerCdpEndpoint = trim(options.viewerCdpEndpoint || entry.playwrightCdpEndpoint);
     entry.playwrightMcpEndpoint = trim(options.playwrightMcpEndpoint);
@@ -1727,7 +1748,7 @@
   };
 
   C8O.agentBridge.codexPrompt = function (options) {
-    options = options || {};
+    options = optionsWithRequestFallbacks(options || {});
     var handle = resolveHandle(options.handle);
     if (!handle.length) {
       return { ok: false, status: "error", error: "handle is required", timestamp: now() };
@@ -1760,6 +1781,9 @@
     }
     if (trim(options.serviceTier || options.speedTier).length) {
       entry.serviceTier = trim(options.serviceTier || options.speedTier);
+    }
+    if (intValue(options.viewerDebugPort, 0, 0, 65535) < 1024 && Number(entry.viewerDebugPort || 0) >= 1024) {
+      options.viewerDebugPort = entry.viewerDebugPort;
     }
     var requestedPlaywrightCdpEndpoint = resolvePlaywrightMcpCdpEndpoint(options);
     if (entry.protocol === "codex-app-server" && requestedPlaywrightCdpEndpoint.length) {
@@ -1808,6 +1832,9 @@
     runtimeOptions.assistantContext = trim(runtimeOptions.assistantContext || entry.assistantContext);
     runtimeOptions.assistantSurface = trim(runtimeOptions.assistantSurface || entry.assistantSurface);
     runtimeOptions.userId = trim(runtimeOptions.userId || entry.userId);
+    runtimeOptions.conversationId = trim(runtimeOptions.conversationId || runtimeOptions.threadid || entry.conversationId || (entry.home && entry.home.conversationId) || entry.handle);
+    runtimeOptions.threadid = trim(runtimeOptions.threadid || runtimeOptions.conversationId);
+    runtimeOptions.projectId = trim(runtimeOptions.projectId || runtimeOptions.projectName || runtimeOptions.targetProject || entry.projectId || (entry.home && entry.home.projectId));
     runtimeOptions.nocodeMcpTokenHandle = trim(runtimeOptions.nocodeMcpTokenHandle || entry.nocodeMcpTokenHandle || entry.noCodeMcpTokenHandle || entry.mcpBearerTokenHandle);
     runtimeOptions.noCodeMcpTokenHandle = trim(runtimeOptions.noCodeMcpTokenHandle || entry.noCodeMcpTokenHandle);
     runtimeOptions.mcpBearerTokenHandle = trim(runtimeOptions.mcpBearerTokenHandle || entry.mcpBearerTokenHandle);
@@ -1827,6 +1854,43 @@
             message: bootstrap.error || bootstrap.message || "Unable to refresh Codex home",
             provider: "codex"
           });
+        }
+        var configRefreshed = bootstrap && bootstrap.generated && bootstrap.generated.indexOf("config.toml") >= 0;
+        if (entry.protocol === "codex-app-server" && configRefreshed) {
+          var restartOptions = runtimeOptions;
+          restartOptions.handle = handle;
+          restartOptions.prompt = promptText;
+          restartOptions.codexHome = entry.home.path;
+          restartOptions.codexHomeScope = "conversation";
+          restartOptions.workspaceRoot = entry.workspaceRoot;
+          restartOptions.cwd = entry.cwd;
+          restartOptions.codexPath = entry.codexPath;
+          restartOptions.codexRuntimeMode = entry.codexRuntimeMode;
+          restartOptions.codexThreadId = entry.codexThreadId || entry.sessionId;
+          restartOptions.model = entry.model;
+          restartOptions.reasoningEffort = entry.reasoningEffort;
+          restartOptions.serviceTier = entry.serviceTier;
+          restartOptions.ttlSeconds = Math.max(30, Math.floor(entry.ttlMillis / 1000));
+          stopEntry(entry, true);
+          var restarted = C8O.agentBridge.codexStart(restartOptions);
+          if (!restarted.ok && /no rollout found for thread id/i.test(String(restarted.error || ""))) {
+            restartOptions.codexThreadId = "";
+            restartOptions.sessionId = "";
+            restartOptions.externalSessionId = "";
+            restarted = C8O.agentBridge.codexStart(restartOptions);
+          }
+          if (!restarted.ok) {
+            return {
+              ok: false,
+              status: "error",
+              phase: "codex_config_restart",
+              handle: handle,
+              error: restarted.error || "Unable to restart Codex after refreshing its MCP configuration.",
+              setup: restarted.setup || null,
+              timestamp: now()
+            };
+          }
+          return C8O.agentBridge.codexPrompt(restartOptions);
         }
       }
     } catch (refreshError) {

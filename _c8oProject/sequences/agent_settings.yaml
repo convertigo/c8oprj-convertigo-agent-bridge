@@ -15,7 +15,12 @@ responseTimeout: 120
       codexPath: typeof codexPath === "undefined" ? "" : codexPath,
       vibeHome: typeof vibeHome === "undefined" ? "" : vibeHome,
       vibeHomeScope: typeof vibeHomeScope === "undefined" ? "" : vibeHomeScope,
-      settingsTimeoutMs: typeof settingsTimeoutMs === "undefined" ? "" : settingsTimeoutMs
+      settingsTimeoutMs: typeof settingsTimeoutMs === "undefined" ? "" : settingsTimeoutMs,
+      checkUpdates: typeof checkUpdates === "undefined" ? "" : checkUpdates,
+      refreshUpdateCheck: typeof refreshUpdateCheck === "undefined" ? "" : refreshUpdateCheck,
+      updateCheckTimeoutMs: typeof updateCheckTimeoutMs === "undefined" ? "" : updateCheckTimeoutMs,
+      updateCheckCacheMs: typeof updateCheckCacheMs === "undefined" ? "" : updateCheckCacheMs,
+      runtimePresenceOnly: typeof runtimePresenceOnly === "undefined" ? "" : runtimePresenceOnly
     });'
 ↓result [steps.JsonToXmlStep-1782118867494]: 
   jsonObject: 
@@ -66,3 +71,18 @@ responseTimeout: 120
 ↓settingsTimeoutMs [variables.RequestableVariable-1782119115959]: 
   comment: Timeout in milliseconds for CLI settings discovery. Defaults to 20000.
   description: Timeout in milliseconds for CLI settings discovery.
+↓checkUpdates [variables.RequestableVariable-1785252949343]: 
+  comment: Check the package registry for newer CLI versions. Disabled by default.
+  description: Check the package registry for newer CLI versions. Disabled by default.
+↓refreshUpdateCheck [variables.RequestableVariable-1785252949345]: 
+  comment: Bypass the cached CLI version check.
+  description: Bypass the cached CLI version check.
+↓updateCheckTimeoutMs [variables.RequestableVariable-1785252949347]: 
+  comment: Timeout in milliseconds for the package registry check.
+  description: Timeout in milliseconds for the package registry check.
+↓updateCheckCacheMs [variables.RequestableVariable-1785252949349]: 
+  comment: Cache duration in milliseconds for package registry checks.
+  description: Cache duration in milliseconds for package registry checks.
+↓runtimePresenceOnly [variables.RequestableVariable-1785255717884]: 
+  comment: Check only for runtime files without invoking the CLI.
+  description: Check only for runtime files without invoking the CLI.

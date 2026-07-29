@@ -21,6 +21,25 @@ same context.
 - Runtime agent files must live under `<workspaceRoot>/agents`, not under the
   Eclipse metadata plugin directory guessed from the repository.
 - Do not commit generated runtime content from `<workspaceRoot>/agents`.
+- Agent settings expose each managed CLI's installed version. Checking the
+  latest available version is opt-in through `checkUpdates` and cached to avoid
+  registry traffic during normal agent calls. The default cache is persisted for
+  six hours in `<workspaceRoot>/agents/runtime-update-checks.json`. The same file
+  also keeps the last discovered provider model catalog, default model, and
+  default reasoning level so presence-only startup checks can hydrate the prompt
+  bar without invoking the CLI. Use
+  `refreshUpdateCheck` only for an explicit user refresh or immediately after an
+  install/update.
+- Startup environment checks must use `runtimePresenceOnly`. This checks known
+  managed paths and `PATH` entries without invoking the CLI; full model
+  discovery is deferred until configuration is opened or the agent starts.
+- Runtime installation and updates are explicit operations. Codex updates use
+  the managed `@openai/codex@latest` package and Vibe updates use the managed
+  `mistral-vibe` package. Do not silently update a provider while starting or
+  resuming a conversation.
+- Refresh model capabilities from the installed CLI after setup. A runtime
+  update affects new agent processes/conversations; an already running process
+  may keep its previous model catalog until it is restarted.
 
 ## Codex Integration
 
@@ -55,7 +74,14 @@ same context.
   bypassing it.
 - Codex setup must synchronize the Convertigo Generalist skill into the managed
   `codex-home/skills/convertigo-generalist/SKILL.md` and write MCP config into
-  `codex-home/config.toml`.
+  `codex-home/config.toml`. The Convertigo MCP entry must include the static
+  `X-Convertigo-Guidance-Version` header matching the managed skill version.
+  Studio/generalist conversations also reserve one stable JxBrowser debug port:
+  write it both to Playwright's `--cdp-endpoint` and to the Convertigo MCP
+  `X-Convertigo-Viewer-Debug-Port` header. The MCP injects that transport value
+  into viewer calls, so prompts and agents must not carry the port themselves.
+  When an existing conversation home is repaired, restart its resident Codex
+  app-server automatically before submitting the pending prompt.
 - When the Assistant passes `agentProfile=nocode`, `skillProfile=nocode`,
   `assistantContext=nocode`, or targets the `C8Oforms` project, setup must use
   the managed `convertigo-nocode` skill instead of `convertigo-generalist`.
