@@ -4,6 +4,7 @@
   var SESSION_HANDLE_ATTR = "ConvertigoAgentBridge.currentHandle";
   var SESSION_CONVERSATION_ATTR = "ConvertigoAgentBridge.currentConversationId";
   var FALLBACK_MCP_PATH = "/api/mcp";
+  var FALLBACK_FLOW_MCP_PATH = "/api/flow-mcp";
   var DEFAULT_TTL_SECONDS = 3600;
   var RUNTIME_UPDATE_CACHE_KEY = "ConvertigoAgentBridge.runtimeUpdateCache.v1";
   var RUNTIME_UPDATE_CACHE_FILE = "runtime-update-checks.json";
@@ -16,6 +17,53 @@
   var MAX_EVENT_BUFFER = 5000;
   var NOCODE_MCP_TOKEN_ENV = "C8O_NOCODE_MCP_TOKEN";
   var MCP_GUIDANCE_VERSION = "2026-07-29.convergent-workflow-v3";
+  var AGENT_CAPABILITY_PROFILES = {
+    generalist: {
+      id: "generalist",
+      label: "Convertigo Generalist",
+      authoringPolicy: "legacy-only",
+      aliases: ["generalist", "legacy", "studio"],
+      capabilityIds: ["convertigo-legacy"],
+      supportedProviders: ["codex", "vibe"],
+      mcpPath: FALLBACK_MCP_PATH,
+      mcpServerName: "convertigo",
+      setupProject: "ConvertigoMCP",
+      setupSkillKey: "generalist",
+      skillSlug: "convertigo-generalist",
+      specialistSkillSlugs: [],
+      setupRequired: false
+    },
+    nocode: {
+      id: "nocode",
+      label: "Convertigo NoCode",
+      authoringPolicy: "nocode",
+      aliases: ["nocode", "no-code", "c8oforms", "forms"],
+      capabilityIds: ["convertigo-nocode"],
+      supportedProviders: ["codex", "vibe"],
+      mcpPath: FALLBACK_MCP_PATH,
+      mcpServerName: "convertigo",
+      setupProject: "ConvertigoMCP",
+      setupSkillKey: "nocode",
+      skillSlug: "convertigo-nocode",
+      specialistSkillSlugs: [],
+      setupRequired: false
+    },
+    flow: {
+      id: "flow",
+      label: "Convertigo Flow",
+      authoringPolicy: "flow-only",
+      aliases: ["flow", "flowscript", "flow-svelte", "frontbuilder-svelte"],
+      capabilityIds: ["convertigo-flow", "flow-backend", "flow-frontend-svelte"],
+      supportedProviders: ["codex"],
+      mcpPath: FALLBACK_FLOW_MCP_PATH,
+      mcpServerName: "convertigo-flow",
+      setupProject: "lib_flow_mcp",
+      setupSkillKey: "",
+      skillSlug: "convertigo-flow-mcp",
+      specialistSkillSlugs: ["convertigo-flow-backend", "convertigo-flow-frontend-svelte"],
+      setupRequired: true
+    }
+  };
 
   var File = Packages.java.io.File;
   var FileOutputStream = Packages.java.io.FileOutputStream;
@@ -359,12 +407,13 @@
     }
   }
 
-  function defaultMcpEndpoint() {
-    return engineConvertigoBaseUrl().replace(/\/+$/g, "") + FALLBACK_MCP_PATH;
+  function defaultMcpEndpoint(profile) {
+    var capabilityProfile = agentCapabilityProfile({ agentProfile: profile });
+    return engineConvertigoBaseUrl().replace(/\/+$/g, "") + capabilityProfile.mcpPath;
   }
 
   function resolveMcpEndpoint(options) {
-    return trim(options && options.mcpEndpoint) || defaultMcpEndpoint();
+    return trim(options && options.mcpEndpoint) || defaultMcpEndpoint(normalizeSkillProfile(options || {}));
   }
 
   function isWindows() {
@@ -609,49 +658,61 @@
   }
 
   function setupCodexFromMcpProject(options, codexHome, mcpEndpoint, profile) {
-    var normalizedProfile = normalizeSkillProfile({ agentProfile: profile });
-    var skillKey = normalizedProfile === "nocode" ? "nocode" : "generalist";
-    var skillLabel = managedSkillLabel(normalizedProfile);
+    var capabilityProfile = agentCapabilityProfile({ agentProfile: profile });
+    var skillKey = capabilityProfile.setupSkillKey;
+    var skillLabel = capabilityProfile.label;
+    var setupProject = capabilityProfile.setupProject;
     var report = {
       attempted: false,
       ok: false,
-      source: "ConvertigoMCP._setupCodex",
+      source: setupProject + "._setupCodex",
       skillStatus: "",
+      backendSkillStatus: "",
+      frontendSkillStatus: "",
       configStatus: "",
       resolvedCodexHome: filePath(codexHome),
       resolvedMcpUrl: trim(mcpEndpoint) || resolveMcpEndpoint(options),
       skillPath: "",
+      backendSkillPath: "",
+      frontendSkillPath: "",
       warnings: [],
       dryRun: boolValue(options.dryRun, false),
       message: "",
       error: ""
     };
-    if (projectDirectoryByName("ConvertigoMCP") === null) {
-      report.message = "ConvertigoMCP project not loaded; using bridge fallback skill generator";
+    if (projectDirectoryByName(setupProject) === null) {
+      report.error = setupProject + " project not loaded";
+      report.message = capabilityProfile.setupRequired
+        ? "Required capability project not loaded: " + setupProject
+        : setupProject + " project not loaded; using bridge fallback skill generator";
       return report;
     }
     report.attempted = true;
     try {
-      var response = callLocalSequence("ConvertigoMCP", "_setupCodex", {
+      var response = callLocalSequence(setupProject, "_setupCodex", {
         codexHome: filePath(codexHome),
         mcpUrl: report.resolvedMcpUrl,
         dryRun: report.dryRun ? "true" : "false"
       });
       var result = findSetupCodexResult(response, 0);
       if (result === null) {
-        throw new Error("ConvertigoMCP._setupCodex did not return a setup result");
+        throw new Error(setupProject + "._setupCodex did not return a setup result");
       }
-      var skillInfo = result.skills && result.skills[skillKey] ? result.skills[skillKey] : null;
-      if (normalizedProfile === "nocode" && skillInfo === null) {
+      var skillInfo = skillKey.length && result.skills && result.skills[skillKey] ? result.skills[skillKey] : null;
+      if (capabilityProfile.id === "nocode" && skillInfo === null) {
         throw new Error("ConvertigoMCP._setupCodex did not return convertigo-nocode skill details");
       }
       var skillPaths = result.skillPaths && typeof result.skillPaths === "object" ? result.skillPaths : {};
       report.ok = true;
       report.skillStatus = trim(skillInfo && skillInfo.status) || trim(result.skillStatus) || "unknown";
+      report.backendSkillStatus = trim(result.backendSkillStatus);
+      report.frontendSkillStatus = trim(result.frontendSkillStatus);
       report.configStatus = trim(result.configStatus) || "unknown";
       report.resolvedCodexHome = trim(result.resolvedCodexHome) || report.resolvedCodexHome;
       report.resolvedMcpUrl = trim(result.resolvedMcpUrl) || report.resolvedMcpUrl;
       report.skillPath = trim(skillInfo && skillInfo.path) || trim(skillPaths[skillKey]) || trim(result.skillPath);
+      report.backendSkillPath = trim(result.backendSkillPath);
+      report.frontendSkillPath = trim(result.frontendSkillPath);
       if (result.warnings && typeof result.warnings.length !== "undefined") {
         for (var i = 0; i < result.warnings.length; i++) {
           var warning = trim(result.warnings[i]);
@@ -660,11 +721,12 @@
           }
         }
       }
-      report.message = skillLabel + " skill synchronized from ConvertigoMCP._setupCodex";
+      report.message = skillLabel + " skill synchronized from " + setupProject + "._setupCodex";
     } catch (e) {
       report.ok = false;
       report.error = String(e);
-      report.message = "Unable to synchronize from ConvertigoMCP._setupCodex; using bridge fallback skill generator";
+      report.message = "Unable to synchronize from " + setupProject + "._setupCodex"
+        + (capabilityProfile.setupRequired ? "" : "; using bridge fallback skill generator");
     }
     return report;
   }
@@ -764,6 +826,33 @@
     return null;
   }
 
+  function flowSkillSourceFile(options, skillSlug) {
+    options = options || {};
+    skillSlug = trim(skillSlug) || "convertigo-flow-mcp";
+    var candidates = [];
+    var explicit = trim(options.flowSkillsSourceDir || options.skillsSourceDir || options.flowMcpDir);
+    if (explicit.length) {
+      var explicitFile = new File(explicit);
+      if (skillSlug === "convertigo-flow-mcp") {
+        candidates.push(new File(explicitFile, "SKILL.md"));
+      }
+      candidates.push(new File(new File(explicitFile, skillSlug), "SKILL.md"));
+      candidates.push(new File(new File(new File(new File(explicitFile, "libs"), "flow"), "resources"), "skills/" + skillSlug + "/SKILL.md"));
+    }
+    var projectDir = projectDirectoryByName("lib_flow_mcp");
+    if (projectDir !== null) {
+      candidates.push(new File(projectDir, "libs/flow/resources/skills/" + skillSlug + "/SKILL.md"));
+    }
+    var home = String(System.getProperty("user.home"));
+    candidates.push(new File(home, "git/lib_flow_mcp/libs/flow/resources/skills/" + skillSlug + "/SKILL.md"));
+    for (var i = 0; i < candidates.length; i++) {
+      if (candidates[i] !== null && candidates[i].isFile()) {
+        return candidates[i];
+      }
+    }
+    return null;
+  }
+
   function normalizeNoCodeSkillContent(content, mcpEndpoint) {
     var text = String(content == null ? "" : content);
     var versionLine = "- Skill guidance version: `" + MCP_GUIDANCE_VERSION + "`.";
@@ -778,8 +867,24 @@
   }
 
   function managedSkillContent(options, profile, mcpEndpoint) {
-    var normalizedProfile = normalizeSkillProfile({ agentProfile: profile });
-    if (normalizedProfile === "nocode") {
+    var capabilityProfile = agentCapabilityProfile({ agentProfile: profile });
+    if (capabilityProfile.id === "flow") {
+      var flowFile = flowSkillSourceFile(options);
+      if (flowFile !== null) {
+        return {
+          content: readTextFile(flowFile),
+          source: filePath(flowFile),
+          copied: true
+        };
+      }
+      return {
+        content: "",
+        source: "",
+        copied: false,
+        missing: true
+      };
+    }
+    if (capabilityProfile.id === "nocode") {
       var noCodeFile = noCodeSkillSourceFile(options);
       if (noCodeFile !== null) {
         return {
@@ -802,67 +907,148 @@
   }
 
   function normalizeSkillProfile(options) {
+    return agentCapabilityProfile(options).id;
+  }
+
+  function requestedSkillProfile(options) {
     options = options || {};
-    var value = trim(
+    return trim(
       optionOrRequest(options, "agentProfile") ||
       optionOrRequest(options, "skillProfile") ||
       optionOrRequest(options, "assistantContext") ||
       optionOrRequest(options, "assistantSurface") ||
       optionOrRequest(options, "profile")
     ).toLowerCase();
+  }
+
+  function profileByAlias(value) {
+    var normalized = trim(value).toLowerCase();
+    for (var id in AGENT_CAPABILITY_PROFILES) {
+      if (!Object.prototype.hasOwnProperty.call(AGENT_CAPABILITY_PROFILES, id)) {
+        continue;
+      }
+      var profile = AGENT_CAPABILITY_PROFILES[id];
+      for (var i = 0; i < profile.aliases.length; i++) {
+        if (normalized === profile.aliases[i]) {
+          return profile;
+        }
+      }
+    }
+    return null;
+  }
+
+  function agentCapabilityProfile(options) {
+    options = options || {};
+    var value = requestedSkillProfile(options);
     var project = trim(
       optionOrRequest(options, "targetProject") ||
       optionOrRequest(options, "projectName") ||
       optionOrRequest(options, "projectId") ||
       optionOrRequest(options, "primaryProject") ||
       resolveProjectIdOption(options)
-    ).toLowerCase();
-    if (value === "nocode" || value === "no-code" || value === "c8oforms" || value === "forms" || project === "c8oforms") {
-      return "nocode";
+    );
+    var explicit = profileByAlias(value);
+    if (explicit !== null) {
+      return explicit;
     }
-    return "generalist";
+    if (!value.length && projectUsesFlow(project)) {
+      return AGENT_CAPABILITY_PROFILES.flow;
+    }
+    if (project.toLowerCase() === "c8oforms") {
+      return AGENT_CAPABILITY_PROFILES.nocode;
+    }
+    return AGENT_CAPABILITY_PROFILES.generalist;
+  }
+
+  function publicAgentCapabilityProfile(options) {
+    var profile = agentCapabilityProfile(options || {});
+    return {
+      id: profile.id,
+      label: profile.label,
+      authoringPolicy: profile.authoringPolicy,
+      capabilityIds: profile.capabilityIds.slice(0),
+      supportedProviders: profile.supportedProviders.slice(0),
+      mcpServerName: profile.mcpServerName,
+      mcpPath: profile.mcpPath,
+      setupProject: profile.setupProject,
+      skillSlug: profile.skillSlug,
+      specialistSkillSlugs: profile.specialistSkillSlugs.slice(0),
+      setupRequired: profile.setupRequired === true
+    };
+  }
+
+  function publicAgentCapabilityProfiles() {
+    return [
+      publicAgentCapabilityProfile({ agentProfile: "generalist" }),
+      publicAgentCapabilityProfile({ agentProfile: "nocode" }),
+      publicAgentCapabilityProfile({ agentProfile: "flow" })
+    ];
+  }
+
+  function projectUsesFlow(projectName) {
+    var name = trim(projectName);
+    if (!name.length) {
+      return false;
+    }
+    var dir = projectDirectoryByName(name);
+    if (dir === null) {
+      return false;
+    }
+    if (new File(dir, "libs/flow/engine.yaml").isFile()) {
+      return true;
+    }
+    try {
+      var yaml = new File(dir, "c8oProject.yaml");
+      return yaml.isFile() && /\[flow\.Flow(?:Engine)?\]/.test(readTextFile(yaml));
+    } catch (_ignoreFlowProjectDetection) {
+      return false;
+    }
   }
 
   function managedSkillSlug(profile) {
-    return normalizeSkillProfile({ agentProfile: profile }) === "nocode" ? "convertigo-nocode" : "convertigo-generalist";
+    return agentCapabilityProfile({ agentProfile: profile }).skillSlug;
   }
 
   function managedSkillLabel(profile) {
-    return normalizeSkillProfile({ agentProfile: profile }) === "nocode" ? "Convertigo NoCode" : "Convertigo Generalist";
+    return agentCapabilityProfile({ agentProfile: profile }).label;
   }
 
   function agentSkillInstructions(provider, profile) {
-    var isNoCode = normalizeSkillProfile({ agentProfile: profile }) === "nocode";
+    var capabilityProfile = agentCapabilityProfile({ agentProfile: profile });
+    var isNoCode = capabilityProfile.id === "nocode";
+    var isFlow = capabilityProfile.id === "flow";
     return [
       "# Convertigo Agent Instructions",
       "",
       "You are running inside a Convertigo-integrated local agent session.",
       "",
-      isNoCode ? "- Automatically follow the Convertigo NoCode workflow for C8Oforms / No-Code Studio work." : "- Automatically follow the Convertigo Generalist workflow for Convertigo project work.",
-      "- Use the Convertigo MCP/tools whenever you need to inspect, modify, save, reload, or validate Convertigo projects.",
-      "- When `mobile-builder-open` returns `browserDebugUrl`, `browserDevToolsJsonUrl`, or `browserDevToolsWebSocketUrl`, treat it as the visible Studio mobile viewer and prefer inspecting or driving that viewer over opening a separate browser.",
-      "- If `mobile-builder-open(stateOnly=true)` returns `status:\"stopped\"`, immediately call it once with `stateOnly=false, wait=false`; do not spend a timeout polling an inactive builder.",
+      "- Active authoring policy: `" + capabilityProfile.authoringPolicy + "` (" + capabilityProfile.label + ").",
+      isFlow ? "- Follow the managed Flow capability pack for project inspection, mutation, viewer startup, synchronization, and validation. It owns the current MCP tool names and workflow." : (isNoCode ? "- Automatically follow the Convertigo NoCode workflow for C8Oforms / No-Code Studio work." : "- Automatically follow the Convertigo Generalist workflow for Convertigo project work."),
+      isFlow ? "- Do not use the legacy Convertigo MCP surface while this flow-only policy is active." : "- Use the Convertigo MCP/tools whenever you need to inspect, modify, save, reload, or validate Convertigo projects.",
+      isFlow ? "- Start viewer preparation asynchronously through the capability pack, continue authoring while it warms up, and use its readiness contract for final acceptance." : "- When `mobile-builder-open` returns `browserDebugUrl`, `browserDevToolsJsonUrl`, or `browserDevToolsWebSocketUrl`, treat it as the visible Studio mobile viewer and prefer inspecting or driving that viewer over opening a separate browser.",
+      isFlow ? "" : "- If `mobile-builder-open(stateOnly=true)` returns `status:\"stopped\"`, immediately call it once with `stateOnly=false, wait=false`; do not spend a timeout polling an inactive builder.",
       "- Studio JxBrowser exposes one existing visible page over CDP, not a normal multi-tab browser. Reuse it and do not create, open, close, select, or navigate tabs/pages.",
       "- For viewer automation, use the Playwright MCP tools exposed by the managed Codex configuration. Do not run ad hoc shell scripts with `require('playwright')`, and do not launch a separate browser unless explicitly needed.",
-      "- Use Playwright only after `mobile-builder-open` reports both `browserDebugPortMatched:true` and `browserControlReady:true`.",
+      isFlow ? "- Use Playwright only after the capability pack reports that the dev viewer is ready and the managed browser target shows that viewer." : "- Use Playwright only after `mobile-builder-open` reports both `browserDebugPortMatched:true` and `browserControlReady:true`.",
       "- Known-good fast check: call `playwright.browser_tabs` only to list and confirm the single current viewer URL, use `playwright.browser_find` for visible UI, and use `playwright.browser_evaluate` only for DOM state or timing. Do not probe unsupported browser features first.",
-      "- If the browser target is `about:blank` while builder status is `building`, poll `mobile-builder-open(stateOnly=true, wait=true)` before Playwright. If status is `stopped`, launch asynchronously instead.",
-      "- If `mobile-builder-open` reports `browserControlReady:true` but the Playwright/browser-control MCP tools are unavailable, disabled, still on `about:blank`, or attached to another endpoint, report the configuration problem to the user instead of bypassing it with Node scripts, raw CDP WebSocket code, or a new browser.",
+      isFlow ? "- If the browser target is `about:blank`, use the capability pack readiness contract before browser proof." : "- If the browser target is `about:blank` while builder status is `building`, poll `mobile-builder-open(stateOnly=true, wait=true)` before Playwright. If status is `stopped`, launch asynchronously instead.",
+      isFlow ? "- If Playwright is unavailable, disabled, still on `about:blank`, or attached to another endpoint, report the host configuration problem instead of bypassing it." : "- If `mobile-builder-open` reports `browserControlReady:true` but the Playwright/browser-control MCP tools are unavailable, disabled, still on `about:blank`, or attached to another endpoint, report the configuration problem to the user instead of bypassing it with Node scripts, raw CDP WebSocket code, or a new browser.",
       "- If a prompt says Convertigo runtime reveal mode is enabled, pass `reveal:true` only on supported Convertigo mutation/viewer tools that should visibly move Studio or No Code Studio; do not add it to read-only calls.",
-      "- For `mobile-builder-open`, use `wait:false` for reveal/focus polls; reserve long `wait:true` calls for readiness proof and omit `reveal` unless the user specifically needs UI focus.",
+      isFlow ? "- Keep viewer starts and synchronization asynchronous until the final acceptance proof." : "- For `mobile-builder-open`, use `wait:false` for reveal/focus polls; reserve long `wait:true` calls for readiness proof and omit `reveal` unless the user specifically needs UI focus.",
       isNoCode ? "- You are in the C8Oforms / No-Code Studio surface, not in Eclipse Studio. A selected Convertigo project is optional in this surface." : "- Work on the selected project unless the user explicitly asks for another project.",
       isNoCode ? "" : "- If no project is selected and the user explicitly asks to create a new project or application, derive a concise valid technical name when needed, check for collisions through Convertigo MCP, and proceed without asking for a project selection.",
       isNoCode ? "- Discover forms, applications, pages, data sources, roles, publication state, and permissions through the NoCode/C8Oforms MCP context before falling back to generic Studio project inspection." : "",
       isNoCode ? "- If the current NoCode URL, form id, route, or page id is supplied in the prompt, treat it as the default target for edits unless the user names another target." : "",
       isNoCode ? "- If a first tool discovery attempt does not show `nocode-form-*` tools, retry with exact searches for `Convertigo NoCode form contract get edit update validate compile C8Oforms`, `nocode-form-contract-get nocode-form-edit nocode-form-update`, and `mcp__convertigo nocode_form_contract_get nocode_form_edit nocode_form_update` before reporting a blocker." : "",
       isNoCode ? "- If no no-code form/application is selected, answer from the C8Oforms workspace or ask which form/application to target; do not assume an unrelated Studio project." : "",
-      "- Prefer Convertigo objects and MCP operations. Do not edit generated folders such as `_private/ionic`, `DisplayObjects`, `dist`, or build outputs.",
+      isFlow ? "- Never use curl, handwritten JSON-RPC, filesystem mutation, or another MCP surface as a fallback. A missing managed Flow capability is a host configuration defect." : "",
+      "- Prefer Convertigo objects and MCP operations. Do not edit generated folders such as `_private/ionic`, `_private/svelte`, `DisplayObjects`, `dist`, or build outputs.",
       "- Reply to the user in their language. Keep progress updates short and factual, and never expose hidden reasoning.",
       "- When you change a project, validate the result with the available Convertigo tools before claiming completion.",
       isNoCode ? "- Keep the user-facing vocabulary no-code oriented: forms, applications, pages, fields, data sources, roles, publication, and permissions." : "",
       "",
-      "The synchronized Convertigo MCP knowledge pack is available in `skills/convertigo-mcp/`.",
-      "Start with `skills/convertigo-mcp/AGENT.md` and `skills/convertigo-mcp/TOOLS.md`, then read only the prompt or resource files relevant to the task.",
+      isFlow ? "The managed Flow skill is available in `skills/" + capabilityProfile.skillSlug + "/SKILL.md`. Use its resources instead of the legacy Convertigo knowledge pack." : "The synchronized Convertigo MCP knowledge pack is available in `skills/convertigo-mcp/`.",
+      isFlow ? "For delegated work, reuse the persistent backend and frontend specialists described by that skill rather than spawning a new agent per lot." : "Start with `skills/convertigo-mcp/AGENT.md` and `skills/convertigo-mcp/TOOLS.md`, then read only the prompt or resource files relevant to the task.",
       isNoCode ? "The managed NoCode skill is available in `skills/convertigo-nocode/SKILL.md` and should be preferred for this surface." : "",
       "",
       "Provider: " + providerLabel(provider)
@@ -1266,7 +1452,9 @@
     options = options || {};
     var text = String(existingText == null ? "" : existingText).replace(/\r\n?/g, "\n");
     var lines = trim(text).length ? splitTextLines(text) : [];
-    var range = findTomlSectionRange(lines, "mcp_servers.convertigo");
+    var serverName = managedMcpServerName(options);
+    var sectionName = "mcp_servers." + serverName;
+    var range = findTomlSectionRange(lines, sectionName);
     var urlLine = 'url = "' + tomlEscape(mcpEndpoint) + '"';
     var timeoutLine = "startup_timeout_sec = 60";
     var enabledLine = "enabled = true";
@@ -1313,7 +1501,7 @@
       if (lines.length && trim(lines[lines.length - 1]).length) {
         lines.push("");
       }
-      lines.push("[mcp_servers.convertigo]");
+      lines.push("[" + sectionName + "]");
       lines.push(urlLine);
       lines.push(timeoutLine);
       lines.push(enabledLine);
@@ -1629,9 +1817,10 @@
   }
 
   function setupCodexGeneralist(options, homePath, mcpEndpoint) {
-    var profile = normalizeSkillProfile(options);
-    var skillSlug = managedSkillSlug(profile);
-    var skillLabel = managedSkillLabel(profile);
+    var capabilityProfile = agentCapabilityProfile(options);
+    var profile = capabilityProfile.id;
+    var skillSlug = capabilityProfile.skillSlug;
+    var skillLabel = capabilityProfile.label;
     var report = {
       attempted: false,
       ok: true,
@@ -1639,10 +1828,14 @@
       source: skillLabel + " setup",
       target: "",
       skillStatus: "skipped",
+      backendSkillStatus: "skipped",
+      frontendSkillStatus: "skipped",
       configStatus: "skipped",
       resolvedCodexHome: "",
       resolvedMcpUrl: trim(mcpEndpoint) || resolveMcpEndpoint(options),
       skillPath: "",
+      backendSkillPath: "",
+      frontendSkillPath: "",
       warnings: [],
       nextSteps: [
         "Restart Codex to pick up the updated skill list.",
@@ -1667,7 +1860,14 @@
       var codexHome = new File(effectiveCodexHomePath(homePath));
       var skillFile = new File(new File(new File(codexHome, "skills"), skillSlug), "SKILL.md");
       var configFile = new File(codexHome, "config.toml");
-      if (!boolValue(options.skipMcpProjectSkillSync || options.skipSetupCodexDelegate, false)) {
+      var skipDelegatedSetup = boolValue(options.skipMcpProjectSkillSync || options.skipSetupCodexDelegate, false);
+      if (skipDelegatedSetup && capabilityProfile.setupRequired) {
+        report.ok = false;
+        report.error = "The " + capabilityProfile.setupProject + " setup cannot be skipped for the " + profile + " profile";
+        report.message = "Required capability setup was disabled by request";
+        return report;
+      }
+      if (!skipDelegatedSetup) {
         var delegated = setupCodexFromMcpProject(options, codexHome, report.resolvedMcpUrl, profile);
         if (delegated.attempted === true && delegated.ok === true) {
           var delegatedConfig = readTextFile(configFile);
@@ -1676,17 +1876,33 @@
             writeTextFile(configFile, delegatedPatch.text);
           }
           report.skillStatus = delegated.skillStatus;
+          report.backendSkillStatus = delegated.backendSkillStatus || report.backendSkillStatus;
+          report.frontendSkillStatus = delegated.frontendSkillStatus || report.frontendSkillStatus;
           report.configStatus = delegatedPatch.status !== "unchanged" ? delegatedPatch.status : delegated.configStatus;
           report.resolvedCodexHome = delegated.resolvedCodexHome || filePath(codexHome);
           report.resolvedMcpUrl = delegated.resolvedMcpUrl || report.resolvedMcpUrl;
           report.target = report.resolvedCodexHome;
           report.skillPath = delegated.skillPath || filePath(skillFile);
+          report.backendSkillPath = delegated.backendSkillPath || "";
+          report.frontendSkillPath = delegated.frontendSkillPath || "";
           report.source = delegated.source;
           report.warnings = report.warnings.concat(delegated.warnings || []);
           if (report.skillStatus === "unchanged") {
             report.reused.push("skills/" + skillSlug + "/SKILL.md");
           } else {
             report.generated.push("skills/" + skillSlug + "/SKILL.md");
+          }
+          if (profile === "flow") {
+            if (report.backendSkillStatus === "unchanged") {
+              report.reused.push("skills/convertigo-flow-backend/SKILL.md");
+            } else {
+              report.generated.push("skills/convertigo-flow-backend/SKILL.md");
+            }
+            if (report.frontendSkillStatus === "unchanged") {
+              report.reused.push("skills/convertigo-flow-frontend-svelte/SKILL.md");
+            } else {
+              report.generated.push("skills/convertigo-flow-frontend-svelte/SKILL.md");
+            }
           }
           if (report.configStatus === "unchanged") {
             report.reused.push("config.toml");
@@ -1699,9 +1915,42 @@
         if (delegated.attempted === true && delegated.message) {
           report.warnings.push(delegated.message + (delegated.error ? ": " + delegated.error : ""));
         }
+        if (capabilityProfile.setupRequired) {
+          report.ok = false;
+          report.error = delegated.error || delegated.message || "Required capability setup failed";
+          report.message = "Unable to configure required " + skillLabel + " capability pack";
+          return report;
+        }
       }
       var skillSource = managedSkillContent(options, profile, report.resolvedMcpUrl);
+      if (skillSource.missing === true || !trim(skillSource.content).length) {
+        throw new Error("Managed skill source not found for " + skillSlug);
+      }
       var skillWrite = writeManagedTextFile(skillFile, skillSource.content, report.dryRun);
+      if (capabilityProfile.specialistSkillSlugs.length) {
+        var specialistSlugs = capabilityProfile.specialistSkillSlugs;
+        for (var specialistIndex = 0; specialistIndex < specialistSlugs.length; specialistIndex++) {
+          var specialistSlug = specialistSlugs[specialistIndex];
+          var specialistSource = flowSkillSourceFile(options, specialistSlug);
+          if (specialistSource === null) {
+            throw new Error("Missing managed specialist skill: " + specialistSlug);
+          }
+          var specialistFile = new File(new File(new File(codexHome, "skills"), specialistSlug), "SKILL.md");
+          var specialistWrite = writeManagedTextFile(specialistFile, readTextFile(specialistSource), report.dryRun);
+          if (specialistSlug === "convertigo-flow-backend") {
+            report.backendSkillStatus = specialistWrite.status;
+            report.backendSkillPath = filePath(specialistFile);
+          } else {
+            report.frontendSkillStatus = specialistWrite.status;
+            report.frontendSkillPath = filePath(specialistFile);
+          }
+          if (specialistWrite.status === "unchanged") {
+            report.reused.push("skills/" + specialistSlug + "/SKILL.md");
+          } else {
+            report.copied.push("skills/" + specialistSlug + "/SKILL.md");
+          }
+        }
+      }
       var existingConfig = readTextFile(configFile);
       var patchedConfig = patchCodexMcpConfigText(existingConfig, report.resolvedMcpUrl, options);
       if (patchedConfig.status !== "unchanged" && report.dryRun !== true) {
@@ -1758,6 +2007,12 @@
       report.message = "Skill synchronization disabled by request";
       return report;
     }
+    if (profile === "flow") {
+      report.ok = false;
+      report.skipped = true;
+      report.message = "The Flow capability pack currently requires the Codex provider";
+      return report;
+    }
     var home = trim(homePath);
     if (!home.length) {
       report.skipped = true;
@@ -1807,7 +2062,7 @@
   }
 
   function appendCodexConvertigoMcpConfig(configFile, mcpEndpoint, options) {
-    var endpoint = trim(mcpEndpoint) || resolveMcpEndpoint({});
+    var endpoint = trim(mcpEndpoint) || resolveMcpEndpoint(options || {});
     var text = configFile.exists() ? readTextFile(configFile) : "";
     if (!text.length) {
       text = [
@@ -1822,6 +2077,10 @@
     }
     writeTextFile(configFile, patched.text);
     return true;
+  }
+
+  function managedMcpServerName(options) {
+    return agentCapabilityProfile(options || {}).mcpServerName;
   }
 
   function copyCodexUserFileIfMissing(sourceDir, targetDir, filename, report) {
@@ -1894,12 +2153,17 @@
       syncCodexUserFile(userCodex, homeDir, "auth.json.api", report);
       syncCodexUserFile(userCodex, homeDir, "installation_id", report);
       var configFile = new File(homeDir, "config.toml");
-      if (appendCodexConvertigoMcpConfig(configFile, mcpEndpoint, options)) {
-        report.generated.push("config.toml");
+      var capabilityProfile = agentCapabilityProfile(options || {});
+      if (capabilityProfile.setupRequired) {
+        report.message = "Scoped CODEX_HOME bootstrapped; capability project owns MCP setup";
       } else {
-        report.reused.push("config.toml");
+        if (appendCodexConvertigoMcpConfig(configFile, mcpEndpoint, options)) {
+          report.generated.push("config.toml");
+        } else {
+          report.reused.push("config.toml");
+        }
+        report.message = "Scoped CODEX_HOME bootstrapped";
       }
-      report.message = "Scoped CODEX_HOME bootstrapped";
     } catch (e) {
       report.ok = false;
       report.error = String(e);
@@ -3832,6 +4096,7 @@
 
   function detectCodexRuntime(options) {
     options = options || {};
+    var capabilityProfile = agentCapabilityProfile(options);
     var workspaceRoot = resolveWorkspaceRoot(options);
     var installDir = normalizeDirectory(options.installDir, childPath(workspaceRoot, "agents/codex"), workspaceRoot);
     var codexHome = resolveCodexHome(options, installDir);
@@ -3849,6 +4114,8 @@
       checked: false,
       ok: false,
       hasConvertigo: false,
+      hasManagedServer: false,
+      managedServerName: capabilityProfile.mcpServerName,
       hasPlaywright: false,
       stdout: "",
       stderr: "",
@@ -3864,6 +4131,7 @@
       mcp.error = mcpProbe.error;
       var mcpText = String((mcpProbe.stdout || "") + "\n" + (mcpProbe.stderr || "")).toLowerCase();
       mcp.hasConvertigo = mcpText.indexOf("convertigo") >= 0;
+      mcp.hasManagedServer = mcpListHasServer(mcpText, capabilityProfile.mcpServerName);
       mcp.hasPlaywright = mcpText.indexOf("playwright") >= 0;
     }
     return {
@@ -3878,11 +4146,22 @@
     };
   }
 
-  function inspectCodexMcpConfig(codexHome) {
+  function mcpListHasServer(text, serverName) {
+    var escaped = String(serverName || "").toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (!escaped.length) {
+      return false;
+    }
+    return new RegExp("(^|[\\s|])" + escaped + "(?=[\\s|]|$)", "m").test(String(text || "").toLowerCase());
+  }
+
+  function inspectCodexMcpConfig(codexHome, options) {
+    var capabilityProfile = agentCapabilityProfile(options || {});
     var result = {
       checked: true,
       ok: false,
       hasConvertigo: false,
+      hasManagedServer: false,
+      managedServerName: capabilityProfile.mcpServerName,
       hasPlaywright: false,
       stdout: "",
       stderr: "",
@@ -3896,8 +4175,9 @@
       }
       var text = readTextFile(configFile).toLowerCase();
       result.hasConvertigo = text.indexOf("convertigo") >= 0 && text.indexOf("mcp") >= 0;
+      result.hasManagedServer = text.indexOf("[mcp_servers." + capabilityProfile.mcpServerName.toLowerCase() + "]") >= 0;
       result.hasPlaywright = text.indexOf("playwright") >= 0 && text.indexOf("mcp") >= 0;
-      result.ok = result.hasConvertigo;
+      result.ok = result.hasManagedServer;
     } catch (error) {
       result.error = String(error);
     }
@@ -3933,7 +4213,7 @@
       playwright: {
         installed: new File(childPath(codexNodeModulesPath(installDir), "@playwright/mcp/package.json")).isFile()
       },
-      mcp: inspectCodexMcpConfig(codexHome.path)
+      mcp: inspectCodexMcpConfig(codexHome.path, options)
     };
   }
 
@@ -4154,6 +4434,8 @@
         checked: mcp.checked === true,
         ok: mcp.ok === true,
         hasConvertigo: mcp.hasConvertigo === true,
+        hasManagedServer: mcp.hasManagedServer === true,
+        managedServerName: String(mcp.managedServerName || ""),
         error: String(mcp.error || "")
       }
     };
@@ -4337,6 +4619,7 @@
 
   function codexSettings(options) {
     options = optionsWithRequestFallbacks(options);
+    var capabilityProfile = publicAgentCapabilityProfile(options);
     var presenceOnly = boolValue(options.runtimePresenceOnly, false);
     var setup = presenceOnly ? detectCodexRuntimePresence(options) : detectCodexRuntime(options);
     var runtime = runtimeUpdateStatus("codex", setup.codex, codexLatestVersion(options, setup), "npm");
@@ -4387,14 +4670,16 @@
       defaultModel: defaultModel,
       models: models,
       reasoningMode: "per_model",
+      profileSupported: capabilityProfile.supportedProviders.indexOf("codex") >= 0,
       supports: {
         resume: true,
         stop: true,
         images: true,
-        mcp: setup.mcp.hasConvertigo === true,
+        mcp: setup.mcp.hasManagedServer === true,
         reasoning: true,
         serviceTier: true
-      }
+      },
+      agentProfile: capabilityProfile
     };
   }
 
@@ -4448,6 +4733,8 @@
 
   function vibeSettings(options) {
     options = optionsWithRequestFallbacks(options);
+    var capabilityProfile = publicAgentCapabilityProfile(options);
+    var profileSupported = capabilityProfile.supportedProviders.indexOf("vibe") >= 0;
     var setup = boolValue(options.runtimePresenceOnly, false) ? detectRuntimePresence(options) : detectRuntime(options);
     var runtime = runtimeUpdateStatus("vibe", setup.vibe, vibeLatestVersion(options, setup), "pypi");
     var selectedFile = setup.vibeHome.length ? new File(setup.vibeHome, "config.toml") : null;
@@ -4476,8 +4763,8 @@
     return {
       id: "vibe",
       label: "Vibe",
-      status: setup.vibe.found && setup.vibeAcp.found ? "ready" : "missing",
-      ready: setup.vibe.found === true && setup.vibeAcp.found === true,
+      status: profileSupported ? (setup.vibe.found && setup.vibeAcp.found ? "ready" : "missing") : "unsupported_profile",
+      ready: profileSupported && setup.vibe.found === true && setup.vibeAcp.found === true,
       runtime: runtime,
       setup: compactVibeSetup(setup),
       source: {
@@ -4489,14 +4776,16 @@
       defaultModel: defaultModel,
       models: models,
       reasoningMode: "model_bound",
+      profileSupported: profileSupported,
       supports: {
         resume: true,
         stop: true,
         images: false,
-        mcp: setup.config.selected.valid || setup.config.user.hasConvertigoServer,
+        mcp: profileSupported && (setup.config.selected.valid || setup.config.user.hasConvertigoServer),
         reasoning: false,
         serviceTier: false
-      }
+      },
+      agentProfile: capabilityProfile
     };
   }
 
@@ -4966,6 +5255,8 @@
     return {
       ok: providers.length > 0,
       status: providers.length ? "ready" : "empty",
+      agentProfile: publicAgentCapabilityProfile(options),
+      agentProfiles: publicAgentCapabilityProfiles(),
       defaults: defaults,
       providers: providers,
       storageCleanup: {

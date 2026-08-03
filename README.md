@@ -57,8 +57,18 @@ handle vivant.
 
 Les appels HTTP directs doivent passer le connecteur minimal `void`. Si
 `mcpEndpoint` est vide, le bridge calcule l'endpoint depuis l'URL Convertigo
-courante du moteur, puis ajoute `/api/mcp`. En local, les ports habituels sont
-`18080` en Studio et `28080` en serveur.
+courante du moteur. Il ajoute `/api/flow-mcp` pour le profil `flow` et
+`/api/mcp` pour les profils legacy/no-code. Le profil Flow est detecte depuis
+le projet selectionne, ou peut etre force avec `agentProfile=flow`. En local,
+les ports habituels sont `18080` en Studio et `28080` en serveur.
+
+Pour Codex, le profil Flow delegue son bootstrap a
+`lib_flow_mcp._setupCodex`. Le home scope recoit alors le serveur nomme
+`convertigo-flow` et trois skills : l'orchestrateur `convertigo-flow-mcp`, le
+specialiste backend persistant `convertigo-flow-backend` et le specialiste
+frontend persistant `convertigo-flow-frontend-svelte`. Une absence de l'outil
+MCP nomme doit etre signalee comme une erreur de configuration; `curl` et le
+JSON-RPC ecrit a la main ne sont pas des fallbacks d'authoring.
 
 Pour les exemples :
 
@@ -222,6 +232,11 @@ chauffe et repoller le builder. Si les outils MCP Playwright/browser ne sont pas
 exposes ou ne ciblent toujours pas le JxBrowser courant apres readiness, l'agent
 doit signaler un probleme de configuration au lieu de contourner avec Node, CDP
 brut ou un navigateur separe.
+
+Pour une application Flow Svelte, le meme raccord Playwright/CDP est conserve,
+mais la preparation du viewer et sa readiness viennent du capability pack Flow,
+pas du workflow legacy `mobile-builder-open`. Le bridge ne connait volontairement
+pas les noms des outils Flow qui realisent ces operations.
 
 L'installation de la CLI ne configure pas l'authentification Codex. L'utilisateur
 doit toujours disposer d'une session Codex valide dans le `CODEX_HOME` choisi,

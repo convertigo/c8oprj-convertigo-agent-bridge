@@ -82,8 +82,8 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
   comment: Workspace directory the agent should work in. Defaults to the Convertigo workspace root.
   description: Workspace directory the agent should work in. Defaults to the Convertigo workspace root.
 ↓mcpEndpoint [variables.RequestableVariable-1781693000207]: 
-  comment: Optional Convertigo MCP endpoint. Defaults to the current Convertigo endpoint plus /api/mcp.
-  description: Optional Convertigo MCP endpoint. Defaults to the current Convertigo endpoint plus /api/mcp.
+  comment: Optional MCP endpoint. Defaults to /api/flow-mcp for Flow projects and /api/mcp otherwise.
+  description: Optional MCP endpoint. Defaults to /api/flow-mcp for Flow projects and /api/mcp otherwise.
 ↓codexHome [variables.RequestableVariable-1781693000208]: 
   comment: Optional explicit CODEX_HOME directory. When empty, the bridge resolves it from codexHomeScope.
   description: Optional explicit CODEX_HOME directory. When empty, the bridge resolves it from codexHomeScope.
@@ -154,11 +154,11 @@ comment: Prepare a Codex CLI conversation entry. The Codex process is launched b
   comment: Optional Codex service tier override, such as priority.
   description: Optional Codex service tier override, such as priority.
 ↓agentProfile [variables.RequestableVariable-1782509099712]: 
-  comment: Agent profile used to select the managed skill pack, for example nocode or generalist.
-  description: Agent profile used to select the managed skill pack, for example nocode or generalist.
+  comment: Agent profile used to select the managed skill pack, for example flow, nocode or generalist.
+  description: Agent profile used to select the managed skill pack, for example flow, nocode or generalist.
 ↓skillProfile [variables.RequestableVariable-1782509099737]: 
-  comment: Skill profile used to select the managed skill pack, for example nocode or generalist.
-  description: Skill profile used to select the managed skill pack, for example nocode or generalist.
+  comment: Skill profile used to select the managed skill pack, for example flow, nocode or generalist.
+  description: Skill profile used to select the managed skill pack, for example flow, nocode or generalist.
 ↓assistantContext [variables.RequestableVariable-1782509099764]: 
   comment: Assistant context supplied by the embedding surface, for example nocode.
   description: Assistant context supplied by the embedding surface, for example nocode.

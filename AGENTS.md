@@ -93,6 +93,11 @@ same context.
   the Codex process environment, and writes `bearer_token_env_var` to
   `codex-home/config.toml`; never write the raw token to config files, prompts,
   logs, or conversation records.
+- Experimental Flow support stays on the private `codex/flow-agent-profile`
+  branch. AgentBridge owns the generic `flow-only` capability profile, but
+  `lib_flow_mcp._setupCodex` owns the Flow MCP server and skills. Never copy
+  concrete Flow tool names into bridge prompts or fall back to legacy MCP when
+  that required capability pack is unavailable.
 - The MCP endpoint should be derived from the current Convertigo endpoint when
   possible. Local hotfix Studio commonly uses
   `http://localhost:18082/convertigo/api/mcp`; standard Studio/server ports may
