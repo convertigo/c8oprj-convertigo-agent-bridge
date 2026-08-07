@@ -16,13 +16,14 @@
   var MAX_EVENT_LIMIT = 500;
   var MAX_EVENT_BUFFER = 5000;
   var NOCODE_MCP_TOKEN_ENV = "C8O_NOCODE_MCP_TOKEN";
-  var MCP_GUIDANCE_VERSION = "2026-07-29.convergent-workflow-v3";
+  var MCP_GUIDANCE_VERSION = "2026-07-30.conversation-bootstrap-v4";
+  var STUDIO_ROUTER_SKILL_SLUG = "convertigo-studio";
   var AGENT_CAPABILITY_PROFILES = {
     generalist: {
       id: "generalist",
       label: "Convertigo Generalist",
       authoringPolicy: "legacy-only",
-      aliases: ["generalist", "legacy", "studio"],
+      aliases: ["generalist", "legacy"],
       capabilityIds: ["convertigo-legacy"],
       supportedProviders: ["codex", "vibe"],
       mcpPath: FALLBACK_MCP_PATH,
@@ -416,6 +417,33 @@
     return trim(options && options.mcpEndpoint) || defaultMcpEndpoint(normalizeSkillProfile(options || {}));
   }
 
+  function copyOptionsWithProfile(options, profile) {
+    var copy = {};
+    options = options || {};
+    for (var key in options) {
+      if (Object.prototype.hasOwnProperty.call(options, key)) {
+        copy[key] = options[key];
+      }
+    }
+    copy.agentProfile = profile;
+    copy.skillProfile = profile;
+    copy.profile = profile;
+    copy.mcpEndpoint = mcpEndpointForProfile(options, profile);
+    return copy;
+  }
+
+  function mcpEndpointForProfile(options, profile) {
+    var explicit = trim(options && options.mcpEndpoint);
+    var capabilityProfile = agentCapabilityProfile({ agentProfile: profile, userId: "studio" });
+    if (explicit.length) {
+      var replaced = explicit.replace(/\/api\/(?:flow-)?mcp(?:\/?(?:[?#].*)?)$/i, capabilityProfile.mcpPath);
+      if (replaced !== explicit) {
+        return replaced;
+      }
+    }
+    return defaultMcpEndpoint(profile);
+  }
+
   function isWindows() {
     return String(System.getProperty("os.name") || "").toLowerCase().indexOf("win") >= 0;
   }
@@ -731,6 +759,32 @@
     return report;
   }
 
+  function skillGuidanceVersion(content) {
+    var match = String(content == null ? "" : content).match(/^- Skill guidance version:\s*`([^`]+)`\./m);
+    return match === null ? "" : trim(match[1]);
+  }
+
+  function installedSkillGuidanceVersion(skillPath) {
+    var path = trim(skillPath);
+    if (!path.length) {
+      return "";
+    }
+    try {
+      return skillGuidanceVersion(readTextFile(new File(path)));
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function installedProfileGuidanceVersion(codexHome, options) {
+    if (codexHome === null || typeof codexHome === "undefined") {
+      return "";
+    }
+    var skillSlug = agentCapabilityProfile(options || {}).skillSlug;
+    var skillFile = new File(new File(new File(codexHome, "skills"), skillSlug), "SKILL.md");
+    return installedSkillGuidanceVersion(filePath(skillFile));
+  }
+
   function mcpSkillSourceCandidate(options) {
     var explicit = trim(options.mcpSkillsSourceDir || options.skillsSourceDir || options.convertigoMcpDir);
     if (explicit.length) {
@@ -916,9 +970,12 @@
       optionOrRequest(options, "agentProfile") ||
       optionOrRequest(options, "skillProfile") ||
       optionOrRequest(options, "assistantContext") ||
-      optionOrRequest(options, "assistantSurface") ||
       optionOrRequest(options, "profile")
     ).toLowerCase();
+  }
+
+  function requestedUserId(options) {
+    return trim(optionOrRequest(options || {}, "userId"));
   }
 
   function profileByAlias(value) {
@@ -948,14 +1005,18 @@
       resolveProjectIdOption(options)
     );
     var explicit = profileByAlias(value);
+    var userId = requestedUserId(options);
+    if (userId.length && userId.toLowerCase() !== "studio") {
+      return AGENT_CAPABILITY_PROFILES.nocode;
+    }
+    if (userId.toLowerCase() === "studio" && explicit === AGENT_CAPABILITY_PROFILES.nocode) {
+      explicit = null;
+    }
     if (explicit !== null) {
       return explicit;
     }
     if (!value.length && projectUsesFlow(project)) {
       return AGENT_CAPABILITY_PROFILES.flow;
-    }
-    if (project.toLowerCase() === "c8oforms") {
-      return AGENT_CAPABILITY_PROFILES.nocode;
     }
     return AGENT_CAPABILITY_PROFILES.generalist;
   }
@@ -978,10 +1039,13 @@
   }
 
   function publicAgentCapabilityProfiles() {
+    var userId = requestedUserId({});
+    if (userId.length && userId.toLowerCase() !== "studio") {
+      return [publicAgentCapabilityProfile({ agentProfile: "nocode", userId: userId })];
+    }
     return [
-      publicAgentCapabilityProfile({ agentProfile: "generalist" }),
-      publicAgentCapabilityProfile({ agentProfile: "nocode" }),
-      publicAgentCapabilityProfile({ agentProfile: "flow" })
+      publicAgentCapabilityProfile({ agentProfile: "generalist", userId: "studio" }),
+      publicAgentCapabilityProfile({ agentProfile: "flow", userId: "studio" })
     ];
   }
 
@@ -1448,7 +1512,7 @@
     };
   }
 
-  function patchCodexMcpConfigText(existingText, mcpEndpoint, options) {
+  function patchCodexMcpConfigText(existingText, mcpEndpoint, options, guidanceVersion) {
     options = options || {};
     var text = String(existingText == null ? "" : existingText).replace(/\r\n?/g, "\n");
     var lines = trim(text).length ? splitTextLines(text) : [];
@@ -1458,7 +1522,8 @@
     var urlLine = 'url = "' + tomlEscape(mcpEndpoint) + '"';
     var timeoutLine = "startup_timeout_sec = 60";
     var enabledLine = "enabled = true";
-    var guidanceHeaderEntry = '"X-Convertigo-Guidance-Version" = "' + tomlEscape(MCP_GUIDANCE_VERSION) + '"';
+    var effectiveGuidanceVersion = trim(guidanceVersion) || MCP_GUIDANCE_VERSION;
+    var guidanceHeaderEntry = '"X-Convertigo-Guidance-Version" = "' + tomlEscape(effectiveGuidanceVersion) + '"';
     var viewerDebugPort = intValue(options.viewerDebugPort, 0, 0, 65535);
     var viewerDebugPortHeaderEntry = viewerDebugPort >= 1024
       ? '"X-Convertigo-Viewer-Debug-Port" = "' + tomlEscape(String(viewerDebugPort)) + '"'
@@ -1816,6 +1881,66 @@
     ].join("\n");
   }
 
+  function buildConvertigoStudioRouterSkill() {
+    return [
+      "---",
+      "name: convertigo-studio",
+      "description: Route every Convertigo Studio task to the Legacy or Flow capability pack. Use this skill first for Convertigo project creation, inspection, mutation, validation, backend work, frontend work, or viewer work.",
+      "---",
+      "",
+      "# Convertigo Studio router",
+      "",
+      "This is a Low Code Studio session. Both the `convertigo` and `convertigo-flow` MCP servers are installed in the same Codex home.",
+      "The No Code capability is unavailable to the Studio user and must never be used from this session.",
+      "",
+      "## Route once before authoring",
+      "",
+      "1. An explicit user request for Flow, FlowScript, or Flow Svelte wins: read `skills/convertigo-flow-mcp/SKILL.md`, then the backend or frontend specialist skill needed by the task, and use `convertigo-flow`.",
+      "2. An explicit user request for legacy Convertigo or NGX wins: read `skills/convertigo-generalist/SKILL.md` and use `convertigo`.",
+      "3. For an existing project, a FlowEngine or Flow frontend selects Flow; legacy Sequences, Connectors, Application, or NGX objects select Legacy for the corresponding work.",
+      "4. A mixed project may require both routes, but each mutation must use the MCP that owns the target model. Never edit Convertigo YAML or generated files to cross the boundary.",
+      "5. If a new-project request is genuinely ambiguous, prefer the technology named by the user. Ask one short question only when the choice changes the requested product behavior.",
+      "",
+      "## Working rules",
+      "",
+      "- Treat the conversation profile as a routing hint, not as a tool-access boundary.",
+      "- Keep one conversation and one history when switching between Legacy and Flow.",
+      "- Do not fall back from one MCP to the other after a tool error. Fix the owning capability or report the configuration defect.",
+      "- Use the selected capability pack's guides and validation workflow before claiming completion.",
+      "- Reply in the user's language."
+    ].join("\n");
+  }
+
+  function installStudioRouterSkill(homePath, dryRun) {
+    var codexHome = new File(effectiveCodexHomePath(homePath));
+    var skillFile = new File(new File(new File(codexHome, "skills"), STUDIO_ROUTER_SKILL_SLUG), "SKILL.md");
+    var write = writeManagedTextFile(skillFile, buildConvertigoStudioRouterSkill(), dryRun === true);
+    return {
+      status: write.status,
+      path: filePath(skillFile)
+    };
+  }
+
+  function removeStudioNoCodeSkill(homePath, dryRun) {
+    var codexHome = new File(effectiveCodexHomePath(homePath));
+    var skillDir = new File(new File(codexHome, "skills"), "convertigo-nocode");
+    var result = {
+      status: "absent",
+      path: filePath(skillDir),
+      errors: []
+    };
+    if (!skillDir.exists()) {
+      return result;
+    }
+    if (dryRun === true) {
+      result.status = "would-remove";
+      return result;
+    }
+    var removed = [];
+    result.status = deleteDirectoryTree(skillDir, removed, result.errors) ? "removed" : "error";
+    return result;
+  }
+
   function setupCodexGeneralist(options, homePath, mcpEndpoint) {
     var capabilityProfile = agentCapabilityProfile(options);
     var profile = capabilityProfile.id;
@@ -1871,7 +1996,13 @@
         var delegated = setupCodexFromMcpProject(options, codexHome, report.resolvedMcpUrl, profile);
         if (delegated.attempted === true && delegated.ok === true) {
           var delegatedConfig = readTextFile(configFile);
-          var delegatedPatch = patchCodexMcpConfigText(delegatedConfig, delegated.resolvedMcpUrl, options);
+          var delegatedGuidanceVersion = installedSkillGuidanceVersion(delegated.skillPath || filePath(skillFile));
+          var delegatedPatch = patchCodexMcpConfigText(
+            delegatedConfig,
+            delegated.resolvedMcpUrl,
+            options,
+            delegatedGuidanceVersion
+          );
           if (delegatedPatch.status !== "unchanged" && report.dryRun !== true) {
             writeTextFile(configFile, delegatedPatch.text);
           }
@@ -1952,7 +2083,13 @@
         }
       }
       var existingConfig = readTextFile(configFile);
-      var patchedConfig = patchCodexMcpConfigText(existingConfig, report.resolvedMcpUrl, options);
+      var installedGuidanceVersion = installedProfileGuidanceVersion(codexHome, options);
+      var patchedConfig = patchCodexMcpConfigText(
+        existingConfig,
+        report.resolvedMcpUrl,
+        options,
+        installedGuidanceVersion
+      );
       if (patchedConfig.status !== "unchanged" && report.dryRun !== true) {
         writeTextFile(configFile, patchedConfig.text);
       }
@@ -1983,9 +2120,77 @@
     return report;
   }
 
+  function setupCodexStudio(options, homePath) {
+    var generalistOptions = copyOptionsWithProfile(options, "generalist");
+    var flowOptions = copyOptionsWithProfile(options, "flow");
+    var generalist = setupCodexGeneralist(generalistOptions, homePath, generalistOptions.mcpEndpoint);
+    var flow = setupCodexGeneralist(flowOptions, homePath, flowOptions.mcpEndpoint);
+    var dryRun = boolValue(options && options.dryRun, false);
+    var router = installStudioRouterSkill(homePath, dryRun);
+    var noCodeSkill = removeStudioNoCodeSkill(homePath, dryRun);
+    var report = {
+      attempted: generalist.attempted === true || flow.attempted === true,
+      ok: generalist.ok === true && flow.ok === true,
+      provider: "codex",
+      source: "Convertigo Studio unified setup",
+      target: generalist.target || flow.target || trim(homePath),
+      skillStatus: generalist.skillStatus || "skipped",
+      backendSkillStatus: flow.backendSkillStatus || "skipped",
+      frontendSkillStatus: flow.frontendSkillStatus || "skipped",
+      configStatus: generalist.configStatus === "unchanged" && flow.configStatus === "unchanged"
+        ? "unchanged"
+        : "updated",
+      routerSkillStatus: router.status,
+      noCodeSkillStatus: noCodeSkill.status,
+      resolvedCodexHome: generalist.resolvedCodexHome || flow.resolvedCodexHome || trim(homePath),
+      resolvedMcpUrl: generalist.resolvedMcpUrl || generalistOptions.mcpEndpoint,
+      resolvedFlowMcpUrl: flow.resolvedMcpUrl || flowOptions.mcpEndpoint,
+      skillPath: generalist.skillPath || "",
+      backendSkillPath: flow.backendSkillPath || "",
+      frontendSkillPath: flow.frontendSkillPath || "",
+      routerSkillPath: router.path,
+      warnings: (generalist.warnings || []).concat(flow.warnings || []),
+      nextSteps: [
+        "Restart Codex only when an already running app-server does not reload the unified configuration.",
+        "Route each task through the convertigo-studio skill before choosing Legacy or Flow."
+      ],
+      dryRun: dryRun,
+      skipped: generalist.skipped === true && flow.skipped === true,
+      message: "Convertigo Studio configured with Legacy and Flow capabilities",
+      error: "",
+      generated: (generalist.generated || []).concat(flow.generated || []),
+      reused: (generalist.reused || []).concat(flow.reused || []),
+      copied: (generalist.copied || []).concat(flow.copied || []),
+      profiles: {
+        generalist: generalist,
+        flow: flow
+      }
+    };
+    if (router.status === "unchanged") {
+      report.reused.push("skills/" + STUDIO_ROUTER_SKILL_SLUG + "/SKILL.md");
+    } else {
+      report.generated.push("skills/" + STUDIO_ROUTER_SKILL_SLUG + "/SKILL.md");
+    }
+    if (noCodeSkill.status === "removed" || noCodeSkill.status === "would-remove") {
+      report.removed = ["skills/convertigo-nocode"];
+    }
+    if (noCodeSkill.status === "error") {
+      report.ok = false;
+      report.warnings.push("Unable to remove the NoCode skill from the Studio home: " + JSON.stringify(noCodeSkill.errors));
+    }
+    if (!report.ok) {
+      report.error = [generalist.error, flow.error].filter(function (value) { return trim(value).length; }).join("; ");
+      report.message = "Unable to configure every Convertigo Studio capability";
+    }
+    return report;
+  }
+
   function installAgentSkills(options, provider, homePath) {
     options = options || {};
     if (normalizeProvider(provider) === "codex") {
+      if (normalizeSkillProfile(options) !== "nocode") {
+        return setupCodexStudio(options, homePath);
+      }
       return setupCodexGeneralist(options, homePath, resolveMcpEndpoint(options));
     }
     var profile = normalizeSkillProfile(options);
@@ -2071,7 +2276,8 @@
         ""
       ].join("\n");
     }
-    var patched = patchCodexMcpConfigText(text, endpoint, options || {});
+    var installedGuidanceVersion = installedProfileGuidanceVersion(configFile.getParentFile(), options || {});
+    var patched = patchCodexMcpConfigText(text, endpoint, options || {}, installedGuidanceVersion);
     if (patched.status === "unchanged") {
       return false;
     }
@@ -2154,15 +2360,24 @@
       syncCodexUserFile(userCodex, homeDir, "installation_id", report);
       var configFile = new File(homeDir, "config.toml");
       var capabilityProfile = agentCapabilityProfile(options || {});
-      if (capabilityProfile.setupRequired) {
-        report.message = "Scoped CODEX_HOME bootstrapped; capability project owns MCP setup";
-      } else {
+      if (capabilityProfile.id === "nocode") {
         if (appendCodexConvertigoMcpConfig(configFile, mcpEndpoint, options)) {
           report.generated.push("config.toml");
         } else {
           report.reused.push("config.toml");
         }
-        report.message = "Scoped CODEX_HOME bootstrapped";
+        report.message = "Scoped NoCode CODEX_HOME bootstrapped";
+      } else {
+        var generalistOptions = copyOptionsWithProfile(options, "generalist");
+        var flowOptions = copyOptionsWithProfile(options, "flow");
+        var generalistChanged = appendCodexConvertigoMcpConfig(configFile, generalistOptions.mcpEndpoint, generalistOptions);
+        var flowChanged = appendCodexConvertigoMcpConfig(configFile, flowOptions.mcpEndpoint, flowOptions);
+        if (generalistChanged || flowChanged) {
+          report.generated.push("config.toml");
+        } else {
+          report.reused.push("config.toml");
+        }
+        report.message = "Scoped Studio CODEX_HOME bootstrapped with Legacy and Flow MCP servers";
       }
     } catch (e) {
       report.ok = false;
@@ -4114,6 +4329,8 @@
       checked: false,
       ok: false,
       hasConvertigo: false,
+      hasLegacy: false,
+      hasFlow: false,
       hasManagedServer: false,
       managedServerName: capabilityProfile.mcpServerName,
       hasPlaywright: false,
@@ -4131,6 +4348,8 @@
       mcp.error = mcpProbe.error;
       var mcpText = String((mcpProbe.stdout || "") + "\n" + (mcpProbe.stderr || "")).toLowerCase();
       mcp.hasConvertigo = mcpText.indexOf("convertigo") >= 0;
+      mcp.hasLegacy = mcpListHasServer(mcpText, "convertigo");
+      mcp.hasFlow = mcpListHasServer(mcpText, "convertigo-flow");
       mcp.hasManagedServer = mcpListHasServer(mcpText, capabilityProfile.mcpServerName);
       mcp.hasPlaywright = mcpText.indexOf("playwright") >= 0;
     }
@@ -4160,6 +4379,8 @@
       checked: true,
       ok: false,
       hasConvertigo: false,
+      hasLegacy: false,
+      hasFlow: false,
       hasManagedServer: false,
       managedServerName: capabilityProfile.mcpServerName,
       hasPlaywright: false,
@@ -4175,9 +4396,13 @@
       }
       var text = readTextFile(configFile).toLowerCase();
       result.hasConvertigo = text.indexOf("convertigo") >= 0 && text.indexOf("mcp") >= 0;
+      result.hasLegacy = text.indexOf("[mcp_servers.convertigo]") >= 0;
+      result.hasFlow = text.indexOf("[mcp_servers.convertigo-flow]") >= 0;
       result.hasManagedServer = text.indexOf("[mcp_servers." + capabilityProfile.mcpServerName.toLowerCase() + "]") >= 0;
       result.hasPlaywright = text.indexOf("playwright") >= 0 && text.indexOf("mcp") >= 0;
-      result.ok = result.hasManagedServer;
+      result.ok = capabilityProfile.id === "nocode"
+        ? result.hasManagedServer
+        : result.hasLegacy && result.hasFlow;
     } catch (error) {
       result.error = String(error);
     }

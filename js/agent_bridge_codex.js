@@ -220,7 +220,11 @@
     }
     var lower = text.toLowerCase();
     var readsManagedSkill = lower.indexOf("skills/convertigo-generalist/skill.md") !== -1 ||
-      lower.indexOf("skills/convertigo-nocode/skill.md") !== -1;
+      lower.indexOf("skills/convertigo-nocode/skill.md") !== -1 ||
+      lower.indexOf("skills/convertigo-studio/skill.md") !== -1 ||
+      lower.indexOf("skills/convertigo-flow-mcp/skill.md") !== -1 ||
+      lower.indexOf("skills/convertigo-flow-backend/skill.md") !== -1 ||
+      lower.indexOf("skills/convertigo-flow-frontend-svelte/skill.md") !== -1;
     return readsManagedSkill &&
       (lower.indexOf("sed -n") !== -1 ||
         lower.indexOf("cat ") !== -1 ||
@@ -1404,15 +1408,21 @@
     if (skills.ok === true) {
       setup = detectCodexRuntime(options);
     }
-    if (setup.codex.found && !setup.mcp.hasConvertigo) {
-      messages.push("Codex does not list the Convertigo MCP server after setup.");
+    var capabilityProfile = agentCapabilityProfile(options);
+    var mcpReady = capabilityProfile.id === "nocode"
+      ? setup.mcp.hasManagedServer === true
+      : setup.mcp.hasLegacy === true && setup.mcp.hasFlow === true;
+    if (setup.codex.found && !mcpReady) {
+      messages.push(capabilityProfile.id === "nocode"
+        ? "Codex does not list the Convertigo NoCode MCP server after setup."
+        : "Codex does not list both Convertigo Legacy and Flow MCP servers after setup.");
     }
     var managedCodex = setup.codex.found && commandPathStartsWith(setup.codex, setup.installDir);
     var playwrightRequired = managedCodex && !boolValue(options.skipCodexPlaywrightInstall || options.skipPlaywrightInstall, false);
     if (playwrightRequired && (!setup.playwright || setup.playwright.found !== true)) {
       messages.push("Playwright MCP is not available in the managed Codex runtime.");
     }
-    var ready = setup.codex.found && !setup.home.error.length && skills.ok === true && setup.mcp.hasConvertigo === true && (!playwrightRequired || setup.playwright.found === true);
+    var ready = setup.codex.found && !setup.home.error.length && skills.ok === true && mcpReady && (!playwrightRequired || setup.playwright.found === true);
     return {
       ok: ready,
       status: ready ? "ready" : "missing",
@@ -1658,7 +1668,7 @@
     entry.workspaceRoot = setup.setup.workspaceRoot;
     var pidFile = protocol === "codex-app-server" ? codexPidFile(setup.setup.workspaceRoot, handle) : null;
     entry.pidFile = pidFile === null ? "" : filePath(pidFile);
-    entry.agentProfile = trim(options.agentProfile || options.skillProfile || options.assistantContext || options.assistantSurface || options.profile);
+    entry.agentProfile = trim(options.agentProfile || options.skillProfile || options.assistantContext || options.profile);
     entry.skillProfile = normalizeSkillProfile(options);
     entry.assistantContext = trim(options.assistantContext);
     entry.assistantSurface = trim(options.assistantSurface);

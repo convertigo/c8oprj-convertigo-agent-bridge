@@ -94,10 +94,15 @@ same context.
   `codex-home/config.toml`; never write the raw token to config files, prompts,
   logs, or conversation records.
 - Experimental Flow support stays on the private `codex/flow-agent-profile`
-  branch. AgentBridge owns the generic `flow-only` capability profile, but
-  `lib_flow_mcp._setupCodex` owns the Flow MCP server and skills. Never copy
-  concrete Flow tool names into bridge prompts or fall back to legacy MCP when
-  that required capability pack is unavailable.
+  branch. The Studio user has one Codex home containing both the Legacy and
+  Flow MCP servers. `ConvertigoMCP._setupCodex` owns the Legacy skill pack and
+  `lib_flow_mcp._setupCodex` owns the Flow pack; AgentBridge adds only the small
+  routing skill. Legacy/Flow profiles are routing hints and conversation
+  metadata, never home or history boundaries.
+- Keep `assistantSurface` independent from authoring routing. A value such as
+  `studio` describes the host UI and must never silently select Legacy.
+- A non-`studio` Assistant user is a NoCode identity. It must be forced to the
+  NoCode capability pack and must never receive Legacy or Flow MCP access.
 - The MCP endpoint should be derived from the current Convertigo endpoint when
   possible. Local hotfix Studio commonly uses
   `http://localhost:18082/convertigo/api/mcp`; standard Studio/server ports may
