@@ -57,10 +57,11 @@ Installer/configurer Vibe dans `<workspace>/agents/vibe` si besoin :
 }
 ```
 
-Si le serveur n'a pas Python, `agent_vibe_setup install=true` appelle le meme
-bootstrap Python que `agent_python_setup`. Le runtime Python est installe sous
-`<workspace>/agents/runtimes/python`, puis le venv Vibe reste sous
-`<workspace>/agents/vibe/.venv`.
+`agent_vibe_setup install=true` appelle le meme bootstrap Python que
+`agent_python_setup`, meme si un Python systeme est disponible. Le runtime
+Python gere est installe sous `<workspace>/agents/runtimes/python`, puis le
+venv Vibe sous `<workspace>/agents/vibe/.venv` est cree ou migre avec ce
+runtime.
 
 Les installations serveur peuvent utiliser un miroir interne :
 
@@ -234,7 +235,9 @@ Le `VIBE_HOME` est resolu avant le demarrage du process :
 Les identifiants ne sont pas recopies en clair dans les chemins ; le bridge
 utilise des UUID stables derives des valeurs fournies.
 
-Les credentials sont choisis separement avec `credentialsPolicy` :
+Le setup copie `~/.vibe/.env` vers le `VIBE_HOME` scope quand il existe. Les
+credentials sont ensuite choisis avec `credentialsPolicy`; la valeur par
+defaut est `vibe-home` :
 
 - `explicit` : variables fournies dans `env` uniquement.
 - `user-home` : lit `~/.vibe/.env` et injecte les variables absentes.

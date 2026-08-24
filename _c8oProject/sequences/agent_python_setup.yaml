@@ -32,8 +32,8 @@ comment: Check or install a workspace-local Python runtime for agent CLIs.
         - ↑mode: PLAIN
         - →→: result
 ↓install [variables.RequestableVariable-1781785110557]: 
-  comment: Set true to install a workspace-local Python runtime when no usable Python is found.
-  description: Set true to install a workspace-local Python runtime when no usable Python is found.
+  comment: Set true to install or reuse the workspace-managed standalone Python runtime.
+  description: Set true to install or reuse the workspace-managed standalone Python runtime.
 ↓workspaceRoot [variables.RequestableVariable-1781785110559]: 
   comment: Optional Convertigo user workspace root. Defaults to Engine.USER_WORKSPACE_PATH.
   description: Optional Convertigo user workspace root. Defaults to Engine.USER_WORKSPACE_PATH.
@@ -71,5 +71,5 @@ comment: Check or install a workspace-local Python runtime for agent CLIs.
   comment: Set false to forbid Python downloads and only report missing runtime.
   description: Set false to forbid Python downloads and only report missing runtime.
 ↓forcePythonInstall [variables.RequestableVariable-1781785110594]: 
-  comment: Set true to install the standalone runtime even when another Python is already found.
-  description: Set true to install the standalone runtime even when another Python is already found.
+  comment: Set true to reinstall the workspace-managed standalone Python runtime.
+  description: Set true to reinstall the workspace-managed standalone Python runtime.

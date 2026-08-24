@@ -377,9 +377,10 @@
       if (name.indexOf(".") < 0) {
         name += ".exe";
       }
-      return childPath(childPath(venvDir, "Scripts"), name);
+      return String(new File(new File(venvDir, "Scripts"), name).getAbsolutePath());
     }
-    return childPath(childPath(venvDir, "bin"), name);
+    // Canonicalizing bin/python follows its symlink outside the venv and makes pip target the system Python.
+    return String(new File(new File(venvDir, "bin"), name).getAbsolutePath());
   }
 
   function ensureDirectory(file) {
@@ -1838,7 +1839,7 @@
     report.copied.push(filename);
   }
 
-  function syncCodexUserFile(sourceDir, targetDir, filename, report) {
+  function syncAgentUserFile(sourceDir, targetDir, filename, report) {
     var source = new File(sourceDir, filename);
     if (!source.isFile()) {
       return;
@@ -1890,9 +1891,9 @@
       migrateLegacyHiddenCodexHome(homeDir, report);
       ensureDirectory(homeDir);
       var userCodex = new File(String(System.getProperty("user.home")), ".codex");
-      syncCodexUserFile(userCodex, homeDir, "auth.json", report);
-      syncCodexUserFile(userCodex, homeDir, "auth.json.api", report);
-      syncCodexUserFile(userCodex, homeDir, "installation_id", report);
+      syncAgentUserFile(userCodex, homeDir, "auth.json", report);
+      syncAgentUserFile(userCodex, homeDir, "auth.json.api", report);
+      syncAgentUserFile(userCodex, homeDir, "installation_id", report);
       var configFile = new File(homeDir, "config.toml");
       if (appendCodexConvertigoMcpConfig(configFile, mcpEndpoint, options)) {
         report.generated.push("config.toml");
@@ -1904,6 +1905,36 @@
       report.ok = false;
       report.error = String(e);
       report.message = "Unable to bootstrap scoped CODEX_HOME";
+    }
+    return report;
+  }
+
+  function bootstrapVibeHome(homePath) {
+    var report = {
+      attempted: false,
+      ok: true,
+      home: trim(homePath),
+      copied: [],
+      reused: [],
+      refreshed: [],
+      message: "",
+      error: ""
+    };
+    if (!report.home.length) {
+      report.message = "Default VIBE_HOME selected; bootstrap skipped";
+      return report;
+    }
+    report.attempted = true;
+    try {
+      var homeDir = new File(report.home);
+      ensureDirectory(homeDir);
+      var userVibe = new File(String(System.getProperty("user.home")), ".vibe");
+      syncAgentUserFile(userVibe, homeDir, ".env", report);
+      report.message = "Scoped VIBE_HOME credentials synchronized";
+    } catch (e) {
+      report.ok = false;
+      report.error = String(e);
+      report.message = "Unable to bootstrap scoped VIBE_HOME";
     }
     return report;
   }
@@ -2726,6 +2757,40 @@
     return result;
   }
 
+  function compactCommandResult(result, maxChars) {
+    result = result || {};
+    var limit = intValue(maxChars, 4000, 256, 16000);
+    var compactText = function (value) {
+      var text = String(value || "");
+      if (text.length <= limit) {
+        return text;
+      }
+      return "... " + text.substring(text.length - limit);
+    };
+    return {
+      command: String(result.command || ""),
+      exitCode: typeof result.exitCode === "number" ? result.exitCode : -1,
+      stdout: compactText(result.stdout),
+      stderr: compactText(result.stderr),
+      durationMs: Number(result.durationMs || 0),
+      ok: result.ok === true,
+      error: String(result.error || "")
+    };
+  }
+
+  function requireSuccessfulCommand(result, label) {
+    if (result && result.ok === true) {
+      return result;
+    }
+    result = result || {};
+    var detail = trim(result.stderr) || trim(result.error) || trim(result.stdout) || "unknown error";
+    if (detail.length > 2000) {
+      detail = "... " + detail.substring(detail.length - 2000);
+    }
+    var exitCode = typeof result.exitCode === "number" ? " (exit " + result.exitCode + ")" : "";
+    throw new Error(String(label || "Command") + " failed" + exitCode + ": " + detail);
+  }
+
   function parseJsonSafe(text, fallback) {
     try {
       return JSON.parse(String(text || ""));
@@ -2976,7 +3041,10 @@
     var runtime = detected.runtime;
     var forceOption = typeof options.force !== "undefined" ? options.force : options.forcePythonInstall;
     var force = boolValue(forceOption, false);
-    if (detected.command.found && !force) {
+    var workspaceFirstOption = typeof options.workspaceInstallFirst !== "undefined" ? options.workspaceInstallFirst : options.preferWorkspaceInstall;
+    var workspaceFirst = boolValue(typeof workspaceFirstOption === "undefined" ? true : workspaceFirstOption, true);
+    var managedPythonReady = detected.command.found && commandPathStartsWith(detected.command, runtime.installDir);
+    if (detected.command.found && !force && (!workspaceFirst || managedPythonReady)) {
       return {
         attempted: false,
         installed: false,
@@ -2990,14 +3058,15 @@
     var allowDownloadOption = typeof options.allowDownload !== "undefined" ? options.allowDownload : options.allowPythonDownload;
     var allowDownload = boolValue(allowDownloadOption, true);
     if (!allowDownload) {
-      throw new Error("Python is missing and downloads are disabled");
+      throw new Error(workspaceFirst ? "Managed Python is missing and downloads are disabled" : "Python is missing and downloads are disabled");
     }
 
     var lock = acquireFileLock(new File(runtime.lockFile), intValue(options.pythonInstallLockTimeoutMs, 600000, 10000, 3600000));
     var steps = [];
     try {
       detected = detectPythonRuntime(options, "");
-      if (detected.command.found && !force) {
+      managedPythonReady = detected.command.found && commandPathStartsWith(detected.command, runtime.installDir);
+      if (detected.command.found && !force && (!workspaceFirst || managedPythonReady)) {
         return {
           attempted: true,
           installed: false,
@@ -3029,8 +3098,8 @@
         throw new Error("Unable to extract Python archive: " + (steps[steps.length - 1].result.stderr || steps[steps.length - 1].result.error));
       }
       try { Files.deleteIfExists(archiveFile.toPath()); } catch (_ignoreArchiveDelete) {}
-      detected = detectPythonRuntime(options, "");
-      if (!detected.command.found) {
+      var managedPython = firstWorkingCommand(pythonBinaryCandidates(runtime.installDir), ["--version"]);
+      if (!managedPython.found) {
         throw new Error("Python archive was extracted but no runnable python executable was found");
       }
       return {
@@ -3038,7 +3107,7 @@
         installed: true,
         reused: false,
         runtime: runtime,
-        python: detected.command,
+        python: managedPython,
         steps: steps,
         timestamp: now()
       };
@@ -4449,7 +4518,9 @@
   function vibeSettings(options) {
     options = optionsWithRequestFallbacks(options);
     var setup = boolValue(options.runtimePresenceOnly, false) ? detectRuntimePresence(options) : detectRuntime(options);
-    var runtime = runtimeUpdateStatus("vibe", setup.vibe, vibeLatestVersion(options, setup), "pypi");
+    var managedVibeReady = commandPathStartsWith(setup.vibe, setup.venvDir) && commandPathStartsWith(setup.vibeAcp, setup.venvDir);
+    var runtimeCommand = managedVibeReady ? setup.vibe : { found: false, path: "", version: "" };
+    var runtime = runtimeUpdateStatus("vibe", runtimeCommand, vibeLatestVersion(options, setup), "pypi");
     var selectedFile = setup.vibeHome.length ? new File(setup.vibeHome, "config.toml") : null;
     var selected = selectedFile !== null ? parseVibeModelsFromConfig(selectedFile) : { path: "", exists: false, activeModel: "", models: [] };
     var user = parseVibeModelsFromConfig(new File(new File(String(System.getProperty("user.home")), ".vibe"), "config.toml"));
@@ -4476,8 +4547,8 @@
     return {
       id: "vibe",
       label: "Vibe",
-      status: setup.vibe.found && setup.vibeAcp.found ? "ready" : "missing",
-      ready: setup.vibe.found === true && setup.vibeAcp.found === true,
+      status: managedVibeReady ? "ready" : "missing",
+      ready: managedVibeReady,
       runtime: runtime,
       setup: compactVibeSetup(setup),
       source: {

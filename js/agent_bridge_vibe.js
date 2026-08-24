@@ -10,10 +10,27 @@
     var workspaceFirst = boolValue(typeof workspaceFirstOption === "undefined" ? true : workspaceFirstOption, true);
     var installation = {
       attempted: false,
+      installed: false,
       python: null,
       steps: []
     };
     var messages = [];
+    var bootstrap = {
+      attempted: false,
+      ok: true,
+      home: setup.vibeHome,
+      copied: [],
+      reused: [],
+      refreshed: [],
+      message: "",
+      error: ""
+    };
+
+    var runInstallStep = function (args, timeoutMs, label) {
+      var result = runCommandCaptured(args, { timeoutMs: timeoutMs });
+      installation.steps.push(compactCommandResult(result, 4000));
+      requireSuccessfulCommand(result, label);
+    };
 
     try {
       if (setup.home.error) {
@@ -23,43 +40,68 @@
         var written = writeLocalVibeConfig(setup.vibeHome, setup.mcpEndpoint, options.model || options.agentModel);
         messages.push("Local VIBE_HOME config written: " + written.path + " (" + written.model + ")");
       }
+      bootstrap = bootstrapVibeHome(setup.vibeHome);
+      if (bootstrap.message) {
+        messages.push(bootstrap.message);
+      }
+      if (!bootstrap.ok) {
+        throw new Error(bootstrap.error || bootstrap.message);
+      }
 
       var workspaceVibeReady = commandPathStartsWith(setup.vibe, setup.installDir) && commandPathStartsWith(setup.vibeAcp, setup.installDir);
       if (install && (forceVibeInstall || !setup.vibe.found || !setup.vibeAcp.found || (workspaceFirst && !workspaceVibeReady))) {
         installation.attempted = true;
         ensureDirectory(new File(setup.installDir));
-        if (!setup.python.found) {
-          installation.python = ensurePythonRuntime({
-            workspaceRoot: options.workspaceRoot,
-            pythonPath: options.pythonPath,
-            pythonInstallDir: options.pythonInstallDir,
-            pythonArchiveUrl: options.pythonArchiveUrl,
-            pythonArchiveSha256: options.pythonArchiveSha256,
-            pythonAssetUrlPrefix: options.pythonAssetUrlPrefix,
-            pythonMirrorBaseUrl: options.pythonMirrorBaseUrl,
-            pythonVersion: options.pythonVersion,
-            pythonBuildTag: options.pythonBuildTag,
-            pythonPlatform: options.pythonPlatform,
-            pythonArchiveFlavor: options.pythonArchiveFlavor,
-            allowPythonDownload: typeof options.allowPythonDownload === "undefined" ? true : options.allowPythonDownload,
-            forcePythonInstall: options.forcePythonInstall
-          });
-          setup = detectRuntime(options);
+        installation.python = ensurePythonRuntime({
+          workspaceRoot: options.workspaceRoot,
+          pythonPath: options.pythonPath,
+          pythonInstallDir: options.pythonInstallDir,
+          pythonArchiveUrl: options.pythonArchiveUrl,
+          pythonArchiveSha256: options.pythonArchiveSha256,
+          pythonAssetUrlPrefix: options.pythonAssetUrlPrefix,
+          pythonMirrorBaseUrl: options.pythonMirrorBaseUrl,
+          pythonVersion: options.pythonVersion,
+          pythonBuildTag: options.pythonBuildTag,
+          pythonPlatform: options.pythonPlatform,
+          pythonArchiveFlavor: options.pythonArchiveFlavor,
+          allowPythonDownload: typeof options.allowPythonDownload === "undefined" ? true : options.allowPythonDownload,
+          forcePythonInstall: options.forcePythonInstall,
+          workspaceInstallFirst: workspaceFirst
+        });
+        var basePython = installation.python && installation.python.python ? installation.python.python : null;
+        if (!basePython || !basePython.found) {
+          throw new Error("Managed Python is required to install mistral-vibe");
         }
-        if (!setup.python.found) {
-          throw new Error("Python is required to install mistral-vibe");
+        if (workspaceFirst && !commandPathStartsWith(basePython, installation.python.runtime.installDir)) {
+          throw new Error("Python setup did not select the managed workspace runtime");
         }
-        if (!new File(setup.venvDir).exists()) {
-          installation.steps.push(runCommand([setup.python.path, "-m", "venv", setup.venvDir], { timeoutMs: 120000 }));
+        var venvExists = new File(setup.venvDir).exists();
+        var venvManaged = !venvExists || !workspaceFirst || commandPathStartsWith({
+          path: parseTomlValue(readTextFile(new File(setup.venvDir, "pyvenv.cfg")), "home")
+        }, installation.python.runtime.installDir);
+        if (!venvExists || !venvManaged) {
+          var venvArgs = [basePython.path, "-m", "venv"];
+          if (venvExists) {
+            venvArgs.push("--clear");
+          }
+          venvArgs.push(setup.venvDir);
+          runInstallStep(venvArgs, 120000, "Vibe virtual environment creation");
         }
         var venvPython = venvBinPath(setup.venvDir, "python");
-        installation.steps.push(runCommand([venvPython, "-m", "pip", "install", "--upgrade", "pip"], { timeoutMs: 180000 }));
-        installation.steps.push(runCommand([venvPython, "-m", "pip", "install", "--upgrade", "mistral-vibe"], { timeoutMs: 600000 }));
+        runInstallStep([venvPython, "-m", "pip", "install", "--upgrade", "pip"], 180000, "Vibe pip bootstrap");
+        runInstallStep([venvPython, "-m", "pip", "install", "--upgrade", "mistral-vibe"], 600000, "Vibe runtime installation");
+
+        setup = detectRuntime(options);
+        var managedVibeReady = commandPathStartsWith(setup.vibe, setup.venvDir) && commandPathStartsWith(setup.vibeAcp, setup.venvDir);
+        if (!managedVibeReady) {
+          throw new Error("Vibe installation completed without runnable managed vibe and vibe-acp commands in " + setup.venvDir);
+        }
+        installation.installed = true;
       }
     } catch (e) {
       messages.push(String(e));
       setup = detectRuntime(options);
-      if (workspaceFirst && setup.vibe.found && setup.vibeAcp.found && !forceVibeInstall) {
+      if (!workspaceFirst && setup.vibe.found && setup.vibeAcp.found && !forceVibeInstall) {
         messages.push("Workspace Vibe install failed; using user PATH fallback.");
         installation.error = String(e);
         var fallbackSkills = installAgentSkills(options, "vibe", setup.vibeHome);
@@ -75,6 +117,7 @@
           phase: "fallback",
           setup: setup,
           installation: installation,
+          bootstrap: bootstrap,
           skills: fallbackSkills,
           messages: messages,
           timestamp: now()
@@ -87,13 +130,16 @@
         error: String(e),
         setup: setup,
         installation: installation,
+        bootstrap: bootstrap,
         messages: messages,
         timestamp: now()
       };
     }
 
     setup = detectRuntime(options);
-    var ready = setup.vibe.found && setup.vibeAcp.found;
+    var ready = setup.vibe.found && setup.vibeAcp.found && (!workspaceFirst || (
+      commandPathStartsWith(setup.vibe, setup.venvDir) && commandPathStartsWith(setup.vibeAcp, setup.venvDir)
+    ));
     var skills = installAgentSkills(options, "vibe", setup.vibeHome);
     if (!setup.config.selected.valid) {
       messages.push("Selected VIBE_HOME has no valid Convertigo MCP HTTP server config yet");
@@ -109,6 +155,7 @@
       status: ready ? "ready" : "missing",
       setup: setup,
       installation: installation,
+      bootstrap: bootstrap,
       skills: skills,
       messages: messages,
       timestamp: now()
@@ -215,6 +262,9 @@
 
     var env = parseObject(options.env, {});
     var vibeHome = setup.setup.vibeHome;
+    if (!trim(options.credentialsPolicy || options.envPolicy).length) {
+      options.credentialsPolicy = "vibe-home";
+    }
     var credentials = applyCredentialsPolicy(env, options, vibeHome);
     if (vibeHome.length) {
       env.VIBE_HOME = vibeHome;

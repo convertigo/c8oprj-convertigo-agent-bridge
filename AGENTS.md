@@ -133,6 +133,14 @@ same context.
   - `js/agent_bridge_vibe.js`
   - `js/vibe_agent_bridge.js`
 - Vibe conversations and homes are managed under `<workspaceRoot>/agents/vibe`.
+- Vibe setup is workspace-managed like Codex setup: install or reuse the
+  standalone Python under `<workspaceRoot>/agents/runtimes/python`, create the
+  Vibe venv under `<workspaceRoot>/agents/vibe/.venv` with that Python, and run
+  only the managed `vibe` and `vibe-acp` binaries. External Python/Vibe paths
+  are diagnostic or explicit opt-out fallbacks, not the default runtime.
+- Bootstrap each scoped `VIBE_HOME` by synchronizing `~/.vibe/.env` when it
+  exists. Start Vibe with the `vibe-home` credentials policy by default; do not
+  send the raw Mistral key through Assistant sequence payloads.
 - In NoCode/C8Oforms contexts, Vibe should resolve home scope by user, not by
   conversation, unless the caller explicitly overrides the scope.
 - Do not add project names into the filesystem path for Codex/Vibe homes.
