@@ -26,8 +26,8 @@
       error: ""
     };
 
-    var runInstallStep = function (args, timeoutMs, label) {
-      var result = runCommandCaptured(args, { timeoutMs: timeoutMs });
+    var runInstallStep = function (args, timeoutMs, label, proxyTargetUrl) {
+      var result = runCommandCaptured(args, { timeoutMs: timeoutMs, proxyTargetUrl: proxyTargetUrl || "" });
       installation.steps.push(compactCommandResult(result, 4000));
       requireSuccessfulCommand(result, label);
     };
@@ -37,8 +37,16 @@
         throw new Error(setup.home.error);
       }
       if (configure) {
-        var written = writeLocalVibeConfig(setup.vibeHome, setup.mcpEndpoint, options.model || options.agentModel);
-        messages.push("Local VIBE_HOME config written: " + written.path + " (" + written.model + ")");
+        if (setup.config.selected.valid && trim(setup.config.selected.endpoint) === trim(setup.mcpEndpoint)) {
+          messages.push("Local VIBE_HOME config reused: " + setup.config.selected.path);
+        } else {
+          var written = writeLocalVibeConfig(setup.vibeHome, setup.mcpEndpoint, options.model || options.agentModel);
+          messages.push("Local VIBE_HOME config written: " + written.path + " (" + written.model + ")");
+        }
+        var presets = ensureManagedVibeModelPresets(setup.vibeHome);
+        if (presets.added.length) {
+          messages.push("Managed Vibe model presets added: " + presets.added.join(", "));
+        }
       }
       bootstrap = bootstrapVibeHome(setup.vibeHome);
       if (bootstrap.message) {
@@ -88,8 +96,8 @@
           runInstallStep(venvArgs, 120000, "Vibe virtual environment creation");
         }
         var venvPython = venvBinPath(setup.venvDir, "python");
-        runInstallStep([venvPython, "-m", "pip", "install", "--upgrade", "pip"], 180000, "Vibe pip bootstrap");
-        runInstallStep([venvPython, "-m", "pip", "install", "--upgrade", "mistral-vibe"], 600000, "Vibe runtime installation");
+        runInstallStep([venvPython, "-m", "pip", "install", "--upgrade", "pip"], 180000, "Vibe pip bootstrap", "https://pypi.org");
+        runInstallStep([venvPython, "-m", "pip", "install", "--upgrade", "mistral-vibe"], 600000, "Vibe runtime installation", "https://pypi.org");
 
         setup = detectRuntime(options);
         var managedVibeReady = commandPathStartsWith(setup.vibe, setup.venvDir) && commandPathStartsWith(setup.vibeAcp, setup.venvDir);
@@ -209,6 +217,30 @@
 
   C8O.agentBridge.vibeStart = function (options) {
     options = options || {};
+    var requestedModel = trim(options.model || options.agentModel);
+    var handle = trim(options.handle) || makeHandle("vibe");
+    var registry = getRegistry();
+    var existing = registry.get(handle);
+    var timeoutMs = intValue(options.requestTimeoutMs, 60000, 1000, 600000);
+    if (existing !== null && typeof existing !== "undefined" && processAlive(existing.process)) {
+      try {
+        configureVibeSession(existing, options, timeoutMs);
+      } catch (configureExistingError) {
+        pushEvent(existing, "warning", {
+          phase: "session/config",
+          message: String(configureExistingError)
+        });
+      }
+      rememberSessionHandle(handle);
+      return {
+        ok: true,
+        status: "already_running",
+        handle: handle,
+        providerSettings: existing.providerSettings || null,
+        state: statusOf(existing),
+        timestamp: now()
+      };
+    }
     var autoConfigure = boolValue(options.autoConfigure, !trim(options.vibeHome).length);
     var setup = C8O.agentBridge.vibeSetup({
       workspaceRoot: options.workspaceRoot,
@@ -219,7 +251,7 @@
       conversationId: options.conversationId,
       projectId: options.projectId,
       mcpEndpoint: options.mcpEndpoint,
-      model: options.model || options.agentModel,
+      model: "",
       install: boolValue(options.install, false),
       pythonPath: options.pythonPath,
       pythonInstallDir: options.pythonInstallDir,
@@ -246,20 +278,6 @@
       };
     }
 
-    var handle = trim(options.handle) || makeHandle("vibe");
-    var registry = getRegistry();
-    var existing = registry.get(handle);
-    if (existing !== null && typeof existing !== "undefined" && processAlive(existing.process)) {
-      rememberSessionHandle(handle);
-      return {
-        ok: true,
-        status: "already_running",
-        handle: handle,
-        state: statusOf(existing),
-        timestamp: now()
-      };
-    }
-
     var env = parseObject(options.env, {});
     var vibeHome = setup.setup.vibeHome;
     if (!trim(options.credentialsPolicy || options.envPolicy).length) {
@@ -273,8 +291,8 @@
     var mcpEndpoint = trim(options.mcpEndpoint) || setup.setup.mcpEndpoint || resolveMcpEndpoint(options);
     var command = parseCommand(options.command, [setup.setup.vibeAcp.path || "vibe-acp"]);
     var ttlMillis = intValue(options.ttlSeconds, DEFAULT_TTL_SECONDS, 30, 86400) * 1000;
-    var timeoutMs = intValue(options.requestTimeoutMs, 60000, 1000, 600000);
-    var entry = createEntry(handle, "vibe", "acp", command, cwd, env, ttlMillis, setup.setup.home, credentials, setup.setup.model);
+    var entry = createEntry(handle, "vibe", "acp", command, cwd, env, ttlMillis, setup.setup.home, credentials, requestedModel || setup.setup.model);
+    entry.workspaceRoot = setup.setup.workspaceRoot;
     entry.convertigoRevealMode = revealModeEnabled(options, null);
     registry.put(handle, entry);
 
@@ -311,6 +329,9 @@
           terminal: false,
           auth: {
             terminal: false
+          },
+          session: {
+            configOptions: {}
           }
         }
       }, timeoutMs);
@@ -321,6 +342,15 @@
         mcpServers: buildMcpServers(mcpEndpoint)
       }, timeoutMs);
       entry.sessionId = String(entry.session.sessionId || entry.session.session_id || "");
+      var sessionProvider = vibeSettings({
+        workspaceRoot: setup.setup.workspaceRoot,
+        vibeHome: setup.setup.vibeHome,
+        vibeHomeScope: "explicit",
+        mcpEndpoint: mcpEndpoint,
+        runtimePresenceOnly: true
+      });
+      updateVibeProviderSettings(entry, entry.session.configOptions || entry.session.config_options || [], sessionProvider);
+      configureVibeSession(entry, options, timeoutMs);
       entry.phase = "ready";
       entry.status = "running";
       pushEvent(entry, "acp/session", {
@@ -335,6 +365,7 @@
         handle: handle,
         sessionId: entry.sessionId,
         cursor: entry.nextIndex,
+        providerSettings: entry.providerSettings || null,
         state: statusOf(entry),
         timestamp: now()
       };
@@ -358,6 +389,40 @@
         state: statusOf(entry),
         timestamp: now()
       };
+    }
+  };
+
+  C8O.agentBridge.discoverVibeSettings = function (options, provider) {
+    options = options || {};
+    provider = provider || {};
+    var setup = provider.setup || {};
+    var handle = makeHandle("vibe-settings");
+    var started = null;
+    try {
+      started = C8O.agentBridge.vibeStart({
+        handle: handle,
+        workspaceRoot: trim(options.workspaceRoot || setup.workspaceRoot),
+        vibeHome: trim(options.vibeHome || setup.vibeHome),
+        vibeHomeScope: trim(options.vibeHome || setup.vibeHome).length ? "explicit" : (options.vibeHomeScope || options.homeScope),
+        userId: options.userId,
+        conversationId: options.conversationId,
+        projectId: options.projectId,
+        mcpEndpoint: options.mcpEndpoint,
+        model: "",
+        reasoningEffort: "",
+        install: false,
+        autoConfigure: true,
+        requestTimeoutMs: options.settingsTimeoutMs || options.requestTimeoutMs || 60000
+      });
+      return started && started.ok !== false && started.providerSettings ? started.providerSettings : provider;
+    } catch (e) {
+      provider.source = provider.source || {};
+      provider.source.discoveryError = String(e);
+      return provider;
+    } finally {
+      try {
+        C8O.agentBridge.vibeClose({ handle: handle });
+      } catch (_ignoreVibeSettingsProbeClose) {}
     }
   };
 

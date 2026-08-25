@@ -84,8 +84,8 @@ responseTimeout: 900
   comment: Optional project identifier included in scoped homes.
   description: Optional project identifier included in scoped homes.
 ↓mcpEndpoint [variables.RequestableVariable-1781693000110]: 
-  comment: Optional Convertigo MCP endpoint. Defaults to the current Convertigo endpoint plus /api/mcp.
-  description: Optional Convertigo MCP endpoint. Defaults to the current Convertigo endpoint plus /api/mcp.
+  comment: Optional MCP endpoint. Defaults to /api/flow-mcp for Flow projects and /api/mcp otherwise.
+  description: Optional MCP endpoint. Defaults to /api/flow-mcp for Flow projects and /api/mcp otherwise.
 ↓codexPath [variables.RequestableVariable-1781693000111]: 
   comment: Optional Codex CLI executable path.
   description: Optional Codex CLI executable path.
@@ -133,11 +133,11 @@ responseTimeout: 900
   description: When true, skips synchronization of the ConvertigoMCP skill pack into the agent home.
   schemaType: xsd:boolean
 ↓agentProfile [variables.RequestableVariable-1782509100003]: 
-  comment: Agent profile used to select the managed skill pack, for example nocode or generalist.
-  description: Agent profile used to select the managed skill pack, for example nocode or generalist.
+  comment: Agent profile used to select the managed skill pack, for example flow, nocode or generalist.
+  description: Agent profile used to select the managed skill pack, for example flow, nocode or generalist.
 ↓skillProfile [variables.RequestableVariable-1782509100029]: 
-  comment: Skill profile used to select the managed skill pack, for example nocode or generalist.
-  description: Skill profile used to select the managed skill pack, for example nocode or generalist.
+  comment: Skill profile used to select the managed skill pack, for example flow, nocode or generalist.
+  description: Skill profile used to select the managed skill pack, for example flow, nocode or generalist.
 ↓assistantContext [variables.RequestableVariable-1782509100053]: 
   comment: Assistant context supplied by the embedding surface, for example nocode.
   description: Assistant context supplied by the embedding surface, for example nocode.

@@ -64,6 +64,16 @@
     return String(value).replace(/^\s+|\s+$/g, "");
   }
 
+  function firstNonBlank(values) {
+    for (var i = 0; values && i < values.length; i++) {
+      var value = trim(values[i]);
+      if (value.length) {
+        return value;
+      }
+    }
+    return "";
+  }
+
   function requestParameter(name) {
     try {
       var request = context && context.httpServletRequest ? context.httpServletRequest : null;
@@ -253,6 +263,128 @@
         pbEnv.put(String(key), String(env[key]));
       }
     }
+  }
+
+  function proxyEnvironmentFromSettings(settings) {
+    settings = settings || {};
+    if (settings.enabled !== true || settings.direct === true || !trim(settings.host).length || Number(settings.port || 0) <= 0) {
+      return {};
+    }
+    var method = trim(settings.method).toLowerCase();
+    var proxyUrl = trim(settings.localProxyUrl);
+    if (!proxyUrl.length) {
+      var credentials = "";
+      if (method === "basic" && trim(settings.user).length) {
+        credentials = encodeURIComponent(String(settings.user)) + ":" + encodeURIComponent(String(settings.password || "")) + "@";
+      }
+      proxyUrl = "http://" + credentials + trim(settings.host) + ":" + Number(settings.port);
+    }
+    var noProxy = trim(settings.noProxy);
+    return {
+      HTTP_PROXY: proxyUrl,
+      HTTPS_PROXY: proxyUrl,
+      NO_PROXY: noProxy,
+      http_proxy: proxyUrl,
+      https_proxy: proxyUrl,
+      no_proxy: noProxy,
+      npm_config_proxy: proxyUrl,
+      npm_config_https_proxy: proxyUrl,
+      PIP_PROXY: proxyUrl
+    };
+  }
+
+  function engineProxySettings(targetUrl) {
+    var settings = {
+      enabled: false,
+      direct: false,
+      mode: "off",
+      method: "anonymous",
+      host: "",
+      port: 0,
+      user: "",
+      password: "",
+      noProxy: "",
+      localProxyUrl: ""
+    };
+    try {
+      var manager = Engine.theApp && Engine.theApp.proxyManager;
+      if (!manager || !manager.isEnabled()) {
+        return settings;
+      }
+      settings.mode = trim(manager.proxyMode).toLowerCase();
+      settings.method = trim(manager.proxyMethod).toLowerCase();
+      settings.user = String(manager.getProxyUser() || "");
+      settings.password = String(manager.getProxyPassword() || "");
+      var bypass = manager.getBypassDomains();
+      var bypassValues = [];
+      for (var i = 0; bypass !== null && i < bypass.length; i++) {
+        var domain = trim(bypass[i]);
+        if (domain.length) {
+          bypassValues.push(domain);
+        }
+      }
+      settings.noProxy = bypassValues.join(",");
+      if (settings.mode === "manual") {
+        settings.host = String(manager.getProxyServer() || "");
+        settings.port = Number(manager.getProxyPort() || 0);
+      } else if (settings.mode === "auto") {
+        var target = trim(targetUrl);
+        if (!target.length) {
+          return settings;
+        }
+        var uri = new Packages.java.net.URI(target);
+        var pac = manager.getPacInfos(target, String(uri.getHost()));
+        if (pac === null) {
+          settings.direct = true;
+          return settings;
+        }
+        settings.host = String(pac.getServer() || "");
+        settings.port = Number(pac.getPort() || 0);
+      }
+      settings.enabled = settings.host.length > 0 && settings.port > 0;
+      if (settings.enabled && settings.method === "ntlm" && settings.mode === "manual") {
+        settings.localProxyUrl = String(Packages.com.twinsoft.convertigo.engine.proxy.ntlm.NtlmConnectProxyBridge.getLocalProxyUrl());
+      }
+    } catch (_ignoreEngineProxySettings) {}
+    return settings;
+  }
+
+  function applyEngineProxyEnvironment(pbEnv, targetUrl) {
+    var settings = engineProxySettings(targetUrl);
+    envObjectToMap(pbEnv, proxyEnvironmentFromSettings(settings));
+    return settings;
+  }
+
+  function configureHttpRequestProxy(request, configBuilder, targetUrl) {
+    var settings = engineProxySettings(targetUrl);
+    var proxyEnv = proxyEnvironmentFromSettings(settings);
+    var proxyUrl = trim(proxyEnv.HTTPS_PROXY);
+    if (!proxyUrl.length) {
+      return settings;
+    }
+    if (settings.method === "ntlm" && !trim(settings.localProxyUrl).length) {
+      throw new Error("The PAC-selected NTLM proxy cannot be exposed to this HTTP request");
+    }
+    var proxyUri = new Packages.java.net.URI(proxyUrl);
+    configBuilder.setProxy(new Packages.org.apache.http.HttpHost(String(proxyUri.getHost()), Number(proxyUri.getPort())));
+    if (settings.method === "basic" && trim(settings.user).length) {
+      var credentials = String(settings.user) + ":" + String(settings.password || "");
+      var encoded = Packages.java.util.Base64.getEncoder().encodeToString(new Packages.java.lang.String(credentials).getBytes(StandardCharsets.UTF_8));
+      request.setHeader("Proxy-Authorization", "Basic " + String(encoded));
+    }
+    return settings;
+  }
+
+  function agentProxyTargetUrl(provider, env) {
+    env = env || {};
+    var normalized = normalizeProvider(provider);
+    if (normalized === "codex") {
+      return trim(env.OPENAI_BASE_URL || env.CODEX_API_BASE_URL) || "https://api.openai.com";
+    }
+    if (normalized === "vibe") {
+      return trim(env.MISTRAL_BASE_URL || env.MISTRAL_API_URL) || "https://api.mistral.ai";
+    }
+    return "";
   }
 
   function filePath(file) {
@@ -2461,7 +2593,7 @@
     if (value.providers === null || typeof value.providers !== "object") {
       value.providers = {};
     }
-    value.version = 2;
+    value.version = 3;
     return {
       file: file,
       value: value
@@ -2494,10 +2626,25 @@
     };
   }
 
-  function readPersistentProviderSettingsCache(workspaceRoot, providerId) {
+  function providerSettingsCacheKey(providerId, profilePath) {
+    var provider = normalizeProvider(providerId);
+    var profile = trim(profilePath);
+    return provider === "vibe" && profile.length ? provider + ":" + hashShort(canonicalFilePath(new File(profile))) : provider;
+  }
+
+  function providerCacheKey(provider) {
+    provider = provider || {};
+    return trim(provider.settingsCacheKey) || normalizeProvider(provider.id);
+  }
+
+  function readPersistentProviderSettingsCache(workspaceRoot, providerId, cacheKey) {
     try {
       var persistent = readPersistentRuntimeUpdateCache(workspaceRoot);
-      var cached = persistent.value.providers[normalizeProvider(providerId)];
+      var key = trim(cacheKey) || normalizeProvider(providerId);
+      var cached = persistent.value.providers[key];
+      if ((!cached || !cached.models || !cached.models.length) && key !== normalizeProvider(providerId) && normalizeProvider(providerId) !== "vibe") {
+        cached = persistent.value.providers[normalizeProvider(providerId)];
+      }
       if (cached && cached.models && cached.models.length) {
         return cached;
       }
@@ -2517,9 +2664,12 @@
       providers = providers || [];
       for (var i = 0; i < providers.length; i++) {
         var provider = providers[i] || {};
-        var providerId = normalizeProvider(provider.id);
-        if (providerId.length && provider.models && provider.models.length) {
-          persistent.value.providers[providerId] = compactProviderSettingsCache(provider);
+        var cacheKey = providerCacheKey(provider);
+        if (cacheKey.length && provider.models && provider.models.length) {
+          persistent.value.providers[cacheKey] = compactProviderSettingsCache(provider);
+          if (cacheKey.indexOf("vibe:") === 0) {
+            delete persistent.value.providers.vibe;
+          }
         }
       }
       writeTextFile(persistent.file, JSON.stringify(persistent.value, null, 2) + "\n");
@@ -2531,12 +2681,12 @@
     }
   }
 
-  function hydrateProviderSettingsFromCache(workspaceRoot, provider) {
+  function hydrateProviderSettingsFromCache(workspaceRoot, provider, preferCached) {
     provider = provider || {};
-    if (provider.models && provider.models.length) {
+    if (!preferCached && provider.models && provider.models.length) {
       return provider;
     }
-    var cached = readPersistentProviderSettingsCache(workspaceRoot, provider.id);
+    var cached = readPersistentProviderSettingsCache(workspaceRoot, provider.id, providerCacheKey(provider));
     if (cached === null) {
       return provider;
     }
@@ -2548,6 +2698,11 @@
     provider.source.settingsCached = true;
     provider.source.settingsCachedAt = Number(cached.cachedAt || 0);
     return provider;
+  }
+
+  function providerSettingsCacheFresh(provider, maxAgeMs) {
+    var cachedAt = Number(provider && provider.source && provider.source.settingsCachedAt || 0);
+    return cachedAt > 0 && now() - cachedAt < maxAgeMs;
   }
 
   function writePersistentRuntimeUpdateCache(workspaceRoot, cacheKey, loaded, nextCheckAt) {
@@ -2677,6 +2832,7 @@
     };
     try {
       var pb = new ProcessBuilder(toJavaList(args));
+      applyEngineProxyEnvironment(pb.environment(), options && options.proxyTargetUrl);
       if (options && options.cwd) {
         pb.directory(new File(String(options.cwd)));
       }
@@ -2724,6 +2880,7 @@
       outFile = File.createTempFile("c8o-agent-bridge-out-", ".log");
       errFile = File.createTempFile("c8o-agent-bridge-err-", ".log");
       var pb = new ProcessBuilder(toJavaList(args));
+      applyEngineProxyEnvironment(pb.environment(), options && options.proxyTargetUrl);
       if (options && options.cwd) {
         pb.directory(new File(String(options.cwd)));
       }
@@ -2811,6 +2968,7 @@
       error: ""
     };
     try {
+      applyEngineProxyEnvironment(pb.environment(), options && options.proxyTargetUrl);
       if (options && options.cwd) {
         pb.directory(new File(String(options.cwd)));
       }
@@ -2857,32 +3015,106 @@
     return total;
   }
 
+  function exceptionChain(error) {
+    var messages = [];
+    var current = error;
+    try {
+      if (error && error.javaException) {
+        current = error.javaException;
+      } else if (error && error.getWrappedException) {
+        current = error.getWrappedException();
+      }
+    } catch (_ignoreWrappedException) {}
+    for (var i = 0; current !== null && typeof current !== "undefined" && i < 8; i++) {
+      var message = trim(String(current));
+      if (message.length && messages.indexOf(message) === -1) {
+        messages.push(message);
+      }
+      try {
+        current = current.getCause ? current.getCause() : null;
+      } catch (_ignoreExceptionCause) {
+        current = null;
+      }
+    }
+    return messages.join(" caused by ") || String(error);
+  }
+
+  function resolveRedirectUrl(baseUrl, location) {
+    return String(new Packages.java.net.URI(String(baseUrl)).resolve(String(location)).toString());
+  }
+
+  function redirectLocationValue(header) {
+    if (header === null || typeof header === "undefined") {
+      return "";
+    }
+    if (typeof header.getValue === "function") {
+      return String(header.getValue());
+    }
+    return String(header).replace(/^Location\s*:\s*/i, "");
+  }
+
+  function validateAbsoluteHttpUrl(url) {
+    var uri = new Packages.java.net.URI(String(url));
+    var scheme = trim(uri.getScheme()).toLowerCase();
+    var host = trim(uri.getHost());
+    if ((scheme !== "http" && scheme !== "https") || !host.length) {
+      throw new Error("Invalid absolute HTTP URL: " + url);
+    }
+    return uri;
+  }
+
   function downloadFile(url, file) {
     var startedAt = now();
     var result = {
       url: String(url),
+      finalUrl: String(url),
       path: filePath(file),
       bytes: 0,
       durationMs: 0,
       ok: false,
       statusCode: 0,
+      redirects: 0,
       error: ""
     };
     try {
-      var get = new Packages.org.apache.http.client.methods.HttpGet(String(url));
-      var response = Packages.com.twinsoft.convertigo.engine.Engine.theApp.httpClient4.execute(get);
-      try {
-        result.statusCode = response.getStatusLine().getStatusCode();
-        if (result.statusCode < 200 || result.statusCode >= 300) {
-          throw new Error("HTTP " + result.statusCode + " while downloading " + url);
+      var currentUrl = String(url);
+      var maxRedirects = 8;
+      while (true) {
+        var get = new Packages.org.apache.http.client.methods.HttpGet(currentUrl);
+        get.setHeader("User-Agent", "ConvertigoAgentBridge");
+        get.setHeader("Accept", "application/octet-stream");
+        var requestConfig = Packages.org.apache.http.client.config.RequestConfig.custom().setRedirectsEnabled(false);
+        configureHttpRequestProxy(get, requestConfig, currentUrl);
+        get.setConfig(requestConfig.build());
+        validateAbsoluteHttpUrl(currentUrl);
+        var response = Packages.com.twinsoft.convertigo.engine.Engine.theApp.httpClient4.execute(get);
+        try {
+          result.statusCode = response.getStatusLine().getStatusCode();
+          result.finalUrl = currentUrl;
+          if (result.statusCode >= 300 && result.statusCode < 400) {
+            var location = response.getFirstHeader("Location");
+            if (location === null) {
+              throw new Error("HTTP " + result.statusCode + " without Location while downloading " + currentUrl);
+            }
+            result.redirects++;
+            if (result.redirects > maxRedirects) {
+              throw new Error("Too many redirects while downloading " + url);
+            }
+            currentUrl = resolveRedirectUrl(currentUrl, redirectLocationValue(location));
+            continue;
+          }
+          if (result.statusCode < 200 || result.statusCode >= 300) {
+            throw new Error("HTTP " + result.statusCode + " while downloading " + currentUrl);
+          }
+          result.bytes = copyStreamToFile(response.getEntity().getContent(), file);
+          result.ok = true;
+          break;
+        } finally {
+          try { response.close(); } catch (_ignoreResponseClose) {}
         }
-        result.bytes = copyStreamToFile(response.getEntity().getContent(), file);
-        result.ok = true;
-      } finally {
-        try { response.close(); } catch (_ignoreResponseClose) {}
       }
     } catch (e) {
-      result.error = String(e);
+      result.error = exceptionChain(e);
     }
     result.durationMs = now() - startedAt;
     return result;
@@ -2979,7 +3211,13 @@
     var asset = "cpython-" + version + "+" + buildTag + "-" + platform + "-" + flavor + ".tar.gz";
     var archiveUrl = trim(options.pythonArchiveUrl);
     if (!archiveUrl.length) {
-      var prefix = trim(options.pythonAssetUrlPrefix || options.pythonMirrorBaseUrl || DEFAULT_PYTHON_ASSET_PREFIX);
+      // Convertigo request variables are Java String objects in Rhino. An empty
+      // Java string is truthy, so normalize candidates before choosing one.
+      var prefix = firstNonBlank([
+        options.pythonAssetUrlPrefix,
+        options.pythonMirrorBaseUrl,
+        DEFAULT_PYTHON_ASSET_PREFIX
+      ]);
       prefix = prefix.replace(/\{tag\}/g, buildTag);
       archiveUrl = prefix.replace(/\/+$/g, "") + "/" + asset.replace(/\+/g, "%2B");
     }
@@ -3416,6 +3654,7 @@
     return runProcessBuilder(pb, {
       cwd: options && options.cwd ? options.cwd : null,
       env: options && options.env ? options.env : null,
+      proxyTargetUrl: "https://registry.npmjs.org",
       timeoutMs: options && options.timeoutMs ? options.timeoutMs : 15000
     });
   }
@@ -3712,6 +3951,43 @@
     }
   }
 
+  function pythonDistInfoVersion(directoryName, packageName) {
+    var normalizedDirectory = trim(directoryName).toLowerCase().replace(/-/g, "_");
+    var normalizedPackage = trim(packageName).toLowerCase().replace(/-/g, "_");
+    var prefix = normalizedPackage + "_";
+    var suffix = ".dist_info";
+    if (normalizedDirectory.indexOf(prefix) !== 0 || normalizedDirectory.slice(-suffix.length) !== suffix) {
+      return "";
+    }
+    return extractRuntimeVersion(normalizedDirectory.substring(prefix.length, normalizedDirectory.length - suffix.length));
+  }
+
+  function installedPythonPackageVersion(venvDir, packageName) {
+    try {
+      var roots = [new File(childPath(childPath(venvDir, "Lib"), "site-packages"))];
+      var libDir = new File(childPath(venvDir, "lib"));
+      var pythonDirs = libDir.isDirectory() ? libDir.listFiles() : null;
+      for (var i = 0; pythonDirs !== null && i < pythonDirs.length; i++) {
+        if (pythonDirs[i].isDirectory() && String(pythonDirs[i].getName()).indexOf("python") === 0) {
+          roots.push(new File(pythonDirs[i], "site-packages"));
+        }
+      }
+      for (var rootIndex = 0; rootIndex < roots.length; rootIndex++) {
+        var entries = roots[rootIndex].isDirectory() ? roots[rootIndex].listFiles() : null;
+        for (var entryIndex = 0; entries !== null && entryIndex < entries.length; entryIndex++) {
+          if (!entries[entryIndex].isDirectory()) {
+            continue;
+          }
+          var version = pythonDistInfoVersion(entries[entryIndex].getName(), packageName);
+          if (version.length) {
+            return version;
+          }
+        }
+      }
+    } catch (_ignoreInstalledPythonPackageVersion) {}
+    return "";
+  }
+
   function inspectVibeConfig(file) {
     var info = {
       path: filePath(file),
@@ -3789,6 +4065,77 @@
     };
   }
 
+  function managedVibeModelPresets() {
+    return [{
+      name: "zai-glm-5-2",
+      provider: "mistral",
+      alias: "zai-glm-5-2",
+      inputPrice: "1.4",
+      outputPrice: "4.4",
+      thinking: "high"
+    }];
+  }
+
+  function vibeConfigHasModel(text, preset) {
+    var blockPattern = /\[\[models\]\]([\s\S]*?)(?=\n\[\[|\n\[|$)/g;
+    var blockMatch;
+    while ((blockMatch = blockPattern.exec(String(text || ""))) !== null) {
+      var block = blockMatch[1];
+      if (parseTomlValue(block, "name") === preset.name || parseTomlValue(block, "alias") === preset.alias) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function appendManagedVibeModelPresets(text) {
+    var result = String(text || "");
+    var presets = managedVibeModelPresets();
+    var added = [];
+    for (var i = 0; i < presets.length; i++) {
+      var preset = presets[i];
+      if (vibeConfigHasModel(result, preset)) {
+        continue;
+      }
+      var block = [
+        "[[models]]",
+        'name = "' + tomlString(preset.name) + '"',
+        'provider = "' + tomlString(preset.provider) + '"',
+        'alias = "' + tomlString(preset.alias) + '"',
+        "input_price = " + preset.inputPrice,
+        "output_price = " + preset.outputPrice,
+        'thinking = "' + tomlString(preset.thinking) + '"',
+        ""
+      ].join("\n");
+      var mcpIndex = result.indexOf("\n[[mcp_servers]]");
+      if (mcpIndex >= 0) {
+        result = result.substring(0, mcpIndex + 1) + block + "\n" + result.substring(mcpIndex + 1);
+      } else {
+        result = result.replace(/\s*$/, "\n\n") + block;
+      }
+      added.push(preset.alias);
+    }
+    return {
+      text: result,
+      added: added
+    };
+  }
+
+  function ensureManagedVibeModelPresets(vibeHome) {
+    var configFile = new File(vibeHome, "config.toml");
+    if (!configFile.isFile()) {
+      return { path: filePath(configFile), added: [] };
+    }
+    var patched = appendManagedVibeModelPresets(readTextFile(configFile));
+    if (patched.added.length) {
+      writeTextFile(configFile, patched.text);
+    }
+    return {
+      path: filePath(configFile),
+      added: patched.added
+    };
+  }
+
   function writeLocalVibeConfig(vibeHome, mcpEndpoint, model) {
     var configDir = new File(vibeHome);
     ensureDirectory(configDir);
@@ -3831,6 +4178,7 @@
       'startup_timeout_sec = 60.0',
       ''
     ].join("\n");
+    text = appendManagedVibeModelPresets(text).text;
     return {
       path: filePath(configFile),
       model: spec.activeModel,
@@ -4015,6 +4363,21 @@
     var vibeHome = vibeHomeInfo.path;
     var userHome = String(System.getProperty("user.home"));
     var homeLocalBin = childPath(userHome, ".local/bin");
+    var vibe = firstExistingCommand([
+      venvBinPath(venvDir, "vibe"),
+      childPath(homeLocalBin, "vibe"),
+      "vibe"
+    ], "");
+    var vibeAcp = firstExistingCommand([
+      venvBinPath(venvDir, "vibe-acp"),
+      childPath(homeLocalBin, "vibe-acp"),
+      "vibe-acp"
+    ], "");
+    if (commandPathStartsWith(vibe, venvDir) && commandPathStartsWith(vibeAcp, venvDir)) {
+      var installedVersion = installedPythonPackageVersion(venvDir, "mistral-vibe");
+      vibe.version = installedVersion.length ? "vibe " + installedVersion : "";
+      vibeAcp.version = installedVersion.length ? "vibe-acp " + installedVersion : "";
+    }
     return {
       workspaceRoot: workspaceRoot,
       installDir: installDir,
@@ -4036,16 +4399,8 @@
         childPath(homeLocalBin, "uv"),
         "uv"
       ], ""),
-      vibe: firstExistingCommand([
-        venvBinPath(venvDir, "vibe"),
-        childPath(homeLocalBin, "vibe"),
-        "vibe"
-      ], ""),
-      vibeAcp: firstExistingCommand([
-        venvBinPath(venvDir, "vibe-acp"),
-        childPath(homeLocalBin, "vibe-acp"),
-        "vibe-acp"
-      ], ""),
+      vibe: vibe,
+      vibeAcp: vibeAcp,
       config: {
         selected: vibeHome.length ? inspectVibeConfig(new File(vibeHome, "config.toml")) : {
           path: "",
@@ -4390,6 +4745,7 @@
         };
       }
       var probe = runCommandCaptured([setup.python.path, "-m", "pip", "index", "versions", "mistral-vibe"], {
+        proxyTargetUrl: "https://pypi.org",
         timeoutMs: intValue(options.updateCheckTimeoutMs, 20000, 1000, 120000)
       });
       var text = String((probe.stdout || "") + "\n" + (probe.stderr || ""));
@@ -4515,6 +4871,169 @@
     return result;
   }
 
+  function acpConfigOptions(value) {
+    value = value || {};
+    var options = value.configOptions || value.config_options || value;
+    return options && typeof options.length !== "undefined" ? options : [];
+  }
+
+  function findAcpConfigOption(configOptions, id) {
+    var wanted = trim(id).toLowerCase();
+    var options = acpConfigOptions(configOptions);
+    for (var i = 0; i < options.length; i++) {
+      var option = options[i] || {};
+      if (trim(option.id || option.configId || option.config_id || option.category).toLowerCase() === wanted) {
+        return option;
+      }
+    }
+    return null;
+  }
+
+  function normalizeAcpSelectOptions(option) {
+    var result = [];
+    var seen = {};
+    var options = option && option.options ? option.options : [];
+    for (var i = 0; i < options.length; i++) {
+      var item = options[i] || {};
+      var id = trim(item.value || item.id || item.name);
+      if (!id.length || seen[id]) {
+        continue;
+      }
+      seen[id] = true;
+      result.push({
+        id: id,
+        label: String(item.name || item.label || id),
+        description: String(item.description || "")
+      });
+    }
+    return result;
+  }
+
+  function normalizeVibeAcpProviderSettings(configOptions, provider) {
+    provider = provider || {};
+    var modelOption = findAcpConfigOption(configOptions, "model");
+    var thinkingOption = findAcpConfigOption(configOptions, "thinking");
+    var modelChoices = normalizeAcpSelectOptions(modelOption);
+    if (!modelChoices.length) {
+      return provider;
+    }
+    var reasoningLevels = normalizeAcpSelectOptions(thinkingOption);
+    var defaultReasoning = trim(thinkingOption && (thinkingOption.currentValue || thinkingOption.current_value));
+    var models = [];
+    for (var i = 0; i < modelChoices.length; i++) {
+      var model = modelChoices[i];
+      models.push({
+        id: model.id,
+        label: model.label,
+        description: model.description,
+        configuredName: model.description,
+        provider: "mistral",
+        defaultReasoning: defaultReasoning,
+        reasoningLevels: reasoningLevels,
+        serviceTiers: [],
+        speedTiers: []
+      });
+    }
+    provider.id = "vibe";
+    provider.label = provider.label || "Vibe";
+    provider.defaultModel = trim(modelOption.currentValue || modelOption.current_value) || models[0].id;
+    provider.models = models;
+    provider.reasoningMode = reasoningLevels.length ? "runtime_selectable" : "model_bound";
+    provider.supports = provider.supports || {};
+    provider.supports.reasoning = reasoningLevels.length > 0;
+    provider.source = provider.source || {};
+    provider.source.type = "acp";
+    provider.source.ok = true;
+    provider.source.error = "";
+    provider.source.settingsCached = false;
+    provider.source.settingsCachedAt = 0;
+    return provider;
+  }
+
+  function updateVibeProviderSettings(entry, configOptions, provider) {
+    if (!entry || normalizeProvider(entry.provider) !== "vibe") {
+      return provider || null;
+    }
+    var base = provider || entry.providerSettings || {
+      id: "vibe",
+      label: "Vibe",
+      ready: true,
+      status: "ready",
+      source: {},
+      supports: {
+        resume: true,
+        stop: true,
+        images: false,
+        mcp: true,
+        reasoning: false,
+        serviceTier: false
+      }
+    };
+    base.settingsCacheKey = providerSettingsCacheKey("vibe", entry.home && entry.home.path);
+    var settings = normalizeVibeAcpProviderSettings(configOptions, base);
+    if (!settings.models || !settings.models.length) {
+      return settings;
+    }
+    entry.configOptions = acpConfigOptions(configOptions);
+    entry.providerSettings = settings;
+    entry.model = settings.defaultModel || entry.model || "";
+    entry.reasoningEffort = providerDefaultReasoning(settings) || entry.reasoningEffort || "";
+    writePersistentProviderSettingsCache(entry.workspaceRoot || "", [settings]);
+    return settings;
+  }
+
+  function acpConfigOptionHasValue(option, value) {
+    var wanted = trim(value);
+    if (!option || !wanted.length) {
+      return false;
+    }
+    var choices = normalizeAcpSelectOptions(option);
+    for (var i = 0; i < choices.length; i++) {
+      if (choices[i].id === wanted) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function configureVibeSession(entry, options, timeoutMs) {
+    options = options || {};
+    var requestedModel = trim(options.model || options.agentModel);
+    var requestedReasoning = trim(options.reasoningEffort || options.reasoningLevel || options.modelReasoningEffort);
+    var configOptions = entry.configOptions || acpConfigOptions(entry.session);
+    var modelOption = findAcpConfigOption(configOptions, "model");
+    if (requestedModel.length && acpConfigOptionHasValue(modelOption, requestedModel) && requestedModel !== trim(modelOption.currentValue || modelOption.current_value)) {
+      var modelResult = acpRequest(entry, "session/set_config_option", {
+        sessionId: entry.sessionId,
+        configId: "model",
+        value: requestedModel
+      }, timeoutMs);
+      configOptions = acpConfigOptions(modelResult);
+      updateVibeProviderSettings(entry, configOptions);
+    } else if (requestedModel.length && !acpConfigOptionHasValue(modelOption, requestedModel)) {
+      pushEvent(entry, "warning", {
+        phase: "session/config",
+        message: "Requested Vibe model is not available for this profile: " + requestedModel
+      });
+    }
+    var thinkingOption = findAcpConfigOption(configOptions, "thinking");
+    if (requestedReasoning.length && acpConfigOptionHasValue(thinkingOption, requestedReasoning) && requestedReasoning !== trim(thinkingOption.currentValue || thinkingOption.current_value)) {
+      var reasoningResult = acpRequest(entry, "session/set_config_option", {
+        sessionId: entry.sessionId,
+        configId: "thinking",
+        value: requestedReasoning
+      }, timeoutMs);
+      configOptions = acpConfigOptions(reasoningResult);
+      updateVibeProviderSettings(entry, configOptions);
+    } else if (requestedReasoning.length && !acpConfigOptionHasValue(thinkingOption, requestedReasoning)) {
+      pushEvent(entry, "warning", {
+        phase: "session/config",
+        message: "Requested Vibe thinking level is not available for this profile: " + requestedReasoning
+      });
+    }
+    return updateVibeProviderSettings(entry, configOptions);
+  }
+
   function vibeSettings(options) {
     options = optionsWithRequestFallbacks(options);
     var setup = boolValue(options.runtimePresenceOnly, false) ? detectRuntimePresence(options) : detectRuntime(options);
@@ -4544,7 +5063,7 @@
       }];
     }
     var defaultModel = config.activeModel || setup.model || (models.length ? models[0].id : "");
-    return {
+    var provider = {
       id: "vibe",
       label: "Vibe",
       status: managedVibeReady ? "ready" : "missing",
@@ -4569,6 +5088,17 @@
         serviceTier: false
       }
     };
+    provider.settingsCacheKey = providerSettingsCacheKey("vibe", setup.vibeHome);
+    provider = hydrateProviderSettingsFromCache(setup.workspaceRoot, provider, true);
+    if (!boolValue(options.runtimePresenceOnly, false) && managedVibeReady && commandPathStartsWith({ path: setup.vibeHome }, setup.installDir)) {
+      var presetUpdate = ensureManagedVibeModelPresets(setup.vibeHome);
+      if (presetUpdate.added.length) {
+        provider.source = provider.source || {};
+        provider.source.settingsCachedAt = 0;
+        provider.source.modelPresetsAdded = presetUpdate.added;
+      }
+    }
+    return provider;
   }
 
   function canonicalFilePath(file) {
@@ -5009,11 +5539,19 @@
         }
       }
     }
-    if (presenceOnly) {
-      for (var cachedProviderIndex = 0; cachedProviderIndex < providers.length; cachedProviderIndex++) {
-        providers[cachedProviderIndex] = hydrateProviderSettingsFromCache(settingsWorkspaceRoot, providers[cachedProviderIndex]);
+    var settingsCacheMaxAgeMs = intValue(options.settingsCacheMaxAgeMs || options.updateCheckCacheMs, DEFAULT_RUNTIME_UPDATE_CACHE_MS, 60000, 604800000);
+    for (var cachedProviderIndex = 0; cachedProviderIndex < providers.length; cachedProviderIndex++) {
+      var currentProvider = providers[cachedProviderIndex];
+      currentProvider = hydrateProviderSettingsFromCache(settingsWorkspaceRoot, currentProvider, normalizeProvider(currentProvider.id) === "vibe");
+      if (!presenceOnly && normalizeProvider(currentProvider.id) === "vibe" && currentProvider.ready === true && typeof C8O.agentBridge.discoverVibeSettings === "function") {
+        var refreshProviderSettings = boolValue(options.refreshProviderSettings || options.refreshModelCatalog || options.refreshUpdateCheck, false);
+        if (refreshProviderSettings || !providerSettingsCacheFresh(currentProvider, settingsCacheMaxAgeMs)) {
+          currentProvider = C8O.agentBridge.discoverVibeSettings(options, currentProvider);
+        }
       }
-    } else {
+      providers[cachedProviderIndex] = currentProvider;
+    }
+    if (!presenceOnly) {
       writePersistentProviderSettingsCache(settingsWorkspaceRoot, providers);
     }
     var defaultProvider = providers.length ? providers[0] : null;
@@ -5182,6 +5720,8 @@
       activeTurnId: "",
       init: null,
       session: null,
+      configOptions: [],
+      providerSettings: null,
       lastError: "",
       lastCodexProgressMessage: "",
       lastCodexAnswerChunk: "",
@@ -5591,6 +6131,16 @@
       pushEvent(entry, "session/update", eventData);
       return;
     }
+    if (kind === "config_option_update") {
+      var configOptions = update.configOptions || update.config_options || [];
+      var providerSettings = updateVibeProviderSettings(entry, configOptions);
+      pushEvent(entry, "config/update", {
+        sessionId: eventData.sessionId,
+        model: providerSettings && providerSettings.defaultModel || entry.model || "",
+        reasoningEffort: providerSettings ? providerDefaultReasoning(providerSettings) : (entry.reasoningEffort || "")
+      });
+      return;
+    }
 
     pushEvent(entry, "acp/session_update", eventData);
   }
@@ -5813,6 +6363,7 @@
   function startProcess(entry, env) {
     var pb = new ProcessBuilder(toJavaList(entry.command));
     pb.directory(new File(entry.cwd));
+    applyEngineProxyEnvironment(pb.environment(), agentProxyTargetUrl(entry.provider, env));
     envObjectToMap(pb.environment(), env);
     entry.process = pb.start();
     entry.writer = new BufferedWriter(new OutputStreamWriter(entry.process.getOutputStream(), StandardCharsets.UTF_8));

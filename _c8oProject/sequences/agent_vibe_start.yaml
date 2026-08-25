@@ -17,6 +17,7 @@ comment: Start a long-running vibe-acp process and create an ACP session.
       autoConfigure: typeof autoConfigure === "undefined" ? "" : autoConfigure,
       install: typeof install === "undefined" ? false : install,
       model: typeof model === "undefined" ? "" : model,
+      reasoningEffort: typeof reasoningEffort === "undefined" ? "" : reasoningEffort,
       pythonPath: typeof pythonPath === "undefined" ? "" : pythonPath,
       pythonInstallDir: typeof pythonInstallDir === "undefined" ? "" : pythonInstallDir,
       pythonArchiveUrl: typeof pythonArchiveUrl === "undefined" ? "" : pythonArchiveUrl,
@@ -138,3 +139,6 @@ comment: Start a long-running vibe-acp process and create an ACP session.
 ↓forcePythonInstall [variables.RequestableVariable-1781785157790]: 
   comment: Set true to reinstall the workspace-managed standalone Python runtime before Vibe start.
   description: Set true to reinstall the workspace-managed standalone Python runtime before Vibe start.
+↓reasoningEffort [variables.RequestableVariable-1787647144866]: 
+  comment: Optional Vibe thinking level selected through ACP.
+  description: Optional Vibe thinking level selected through ACP.

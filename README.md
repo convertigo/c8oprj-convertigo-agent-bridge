@@ -136,9 +136,16 @@ Le bootstrap Vibe fait :
    chaque `CODEX_HOME` gere.
 6. Demarrage du `vibe-acp` gere avec ce `VIBE_HOME`, puis handshake ACP
    `initialize` + `session/new`.
+7. Lecture du catalogue `configOptions` retourne par la session ACP. Les
+   modeles routes par le compte Vibe, leurs libelles et les niveaux de
+   raisonnement sont exposes a l'Assistant et caches par `VIBE_HOME` pendant
+   six heures. Un modele choisi est applique au process vivant avec
+   `session/set_config_option`, sans regenerer une definition TOML approximative.
+8. Ajout idempotent du preset `zai-glm-5-2` dans le `config.toml` gere. Vibe
+   l'expose alors dans son catalogue ACP avec les tarifs publics Mistral.
 
-Vibe 2.9.6 charge aussi sa config `config.toml`; le champ ACP `mcpServers` seul
-ne suffit pas. Le setup local configure donc explicitement le MCP dans le
+Vibe charge aussi sa config `config.toml`; le champ ACP `mcpServers` seul ne
+suffit pas. Le setup local configure donc explicitement le MCP dans le
 `VIBE_HOME` utilise par le process.
 
 ## Runtime Python workspace-local
@@ -155,7 +162,9 @@ et le telecharge s'il est absent, meme si un Python systeme est disponible.
 Une installation externe reste visible pour le diagnostic et peut etre
 explicitement autorisee avec `workspaceInstallFirst=false`. L'archive
 `python-build-standalone` est telechargee via le client HTTP du moteur
-Convertigo, donc avec la configuration proxy du serveur. Le telechargement peut
+Convertigo. Le bridge applique aussi le proxy a chaque requete et reevalue un
+eventuel PAC apres chaque redirection. Le proxy basic est authentifie et le mode
+NTLM manuel passe par le bridge NTLM local de Convertigo. Le telechargement peut
 etre remplace par :
 
 - `pythonArchiveUrl` : URL directe de l'archive.
@@ -170,6 +179,15 @@ workspace Convertigo.
 
 Cette installation est partageable par les providers. Les venvs restent separes
 par agent, par exemple `<workspace>/agents/vibe/.venv`.
+
+Les commandes externes lancees par le bridge recoivent aussi la configuration
+proxy du moteur Convertigo. Cela couvre `pip`, les controles PyPI, `npm`, puis
+les processus Vibe et Codex eux-memes pour leurs appels distants. Le bridge
+propage `HTTP_PROXY`, `HTTPS_PROXY`, leurs variantes minuscules, `NO_PROXY`, les
+variables npm et `PIP_PROXY`. L'authentification basic est encodee dans l'URL et
+le mode NTLM manuel utilise le proxy local `NtlmConnectProxyBridge`. En mode PAC,
+le proxy est evalue pour la destination principale (PyPI, registre npm, OpenAI
+ou Mistral).
 
 ## Runtime Codex workspace-local
 
