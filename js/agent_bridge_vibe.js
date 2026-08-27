@@ -10,56 +10,106 @@
     var workspaceFirst = boolValue(typeof workspaceFirstOption === "undefined" ? true : workspaceFirstOption, true);
     var installation = {
       attempted: false,
+      installed: false,
       python: null,
       steps: []
     };
     var messages = [];
+    var bootstrap = {
+      attempted: false,
+      ok: true,
+      home: setup.vibeHome,
+      copied: [],
+      reused: [],
+      refreshed: [],
+      message: "",
+      error: ""
+    };
+
+    var runInstallStep = function (args, timeoutMs, label, proxyTargetUrl) {
+      var result = runCommandCaptured(args, { timeoutMs: timeoutMs, proxyTargetUrl: proxyTargetUrl || "" });
+      installation.steps.push(compactCommandResult(result, 4000));
+      requireSuccessfulCommand(result, label);
+    };
 
     try {
       if (setup.home.error) {
         throw new Error(setup.home.error);
       }
       if (configure) {
-        var written = writeLocalVibeConfig(setup.vibeHome, setup.mcpEndpoint, options.model || options.agentModel);
-        messages.push("Local VIBE_HOME config written: " + written.path + " (" + written.model + ")");
+        if (setup.config.selected.valid && trim(setup.config.selected.endpoint) === managedMcpTransportEndpoint(setup.mcpEndpoint)) {
+          messages.push("Local VIBE_HOME config reused: " + setup.config.selected.path);
+        } else {
+          var written = writeLocalVibeConfig(setup.vibeHome, setup.mcpEndpoint, options.model || options.agentModel);
+          messages.push("Local VIBE_HOME config written: " + written.path + " (" + written.model + ")");
+        }
+        var presets = ensureManagedVibeModelPresets(setup.vibeHome);
+        if (presets.added.length) {
+          messages.push("Managed Vibe model presets added: " + presets.added.join(", "));
+        }
+      }
+      bootstrap = bootstrapVibeHome(setup.vibeHome);
+      if (bootstrap.message) {
+        messages.push(bootstrap.message);
+      }
+      if (!bootstrap.ok) {
+        throw new Error(bootstrap.error || bootstrap.message);
       }
 
       var workspaceVibeReady = commandPathStartsWith(setup.vibe, setup.installDir) && commandPathStartsWith(setup.vibeAcp, setup.installDir);
       if (install && (forceVibeInstall || !setup.vibe.found || !setup.vibeAcp.found || (workspaceFirst && !workspaceVibeReady))) {
         installation.attempted = true;
         ensureDirectory(new File(setup.installDir));
-        if (!setup.python.found) {
-          installation.python = ensurePythonRuntime({
-            workspaceRoot: options.workspaceRoot,
-            pythonPath: options.pythonPath,
-            pythonInstallDir: options.pythonInstallDir,
-            pythonArchiveUrl: options.pythonArchiveUrl,
-            pythonArchiveSha256: options.pythonArchiveSha256,
-            pythonAssetUrlPrefix: options.pythonAssetUrlPrefix,
-            pythonMirrorBaseUrl: options.pythonMirrorBaseUrl,
-            pythonVersion: options.pythonVersion,
-            pythonBuildTag: options.pythonBuildTag,
-            pythonPlatform: options.pythonPlatform,
-            pythonArchiveFlavor: options.pythonArchiveFlavor,
-            allowPythonDownload: typeof options.allowPythonDownload === "undefined" ? true : options.allowPythonDownload,
-            forcePythonInstall: options.forcePythonInstall
-          });
-          setup = detectRuntime(options);
+        installation.python = ensurePythonRuntime({
+          workspaceRoot: options.workspaceRoot,
+          pythonPath: options.pythonPath,
+          pythonInstallDir: options.pythonInstallDir,
+          pythonArchiveUrl: options.pythonArchiveUrl,
+          pythonArchiveSha256: options.pythonArchiveSha256,
+          pythonAssetUrlPrefix: options.pythonAssetUrlPrefix,
+          pythonMirrorBaseUrl: options.pythonMirrorBaseUrl,
+          pythonVersion: options.pythonVersion,
+          pythonBuildTag: options.pythonBuildTag,
+          pythonPlatform: options.pythonPlatform,
+          pythonArchiveFlavor: options.pythonArchiveFlavor,
+          allowPythonDownload: typeof options.allowPythonDownload === "undefined" ? true : options.allowPythonDownload,
+          forcePythonInstall: options.forcePythonInstall,
+          workspaceInstallFirst: workspaceFirst
+        });
+        var basePython = installation.python && installation.python.python ? installation.python.python : null;
+        if (!basePython || !basePython.found) {
+          throw new Error("Managed Python is required to install mistral-vibe");
         }
-        if (!setup.python.found) {
-          throw new Error("Python is required to install mistral-vibe");
+        if (workspaceFirst && !commandPathStartsWith(basePython, installation.python.runtime.installDir)) {
+          throw new Error("Python setup did not select the managed workspace runtime");
         }
-        if (!new File(setup.venvDir).exists()) {
-          installation.steps.push(runCommand([setup.python.path, "-m", "venv", setup.venvDir], { timeoutMs: 120000 }));
+        var venvExists = new File(setup.venvDir).exists();
+        var venvManaged = !venvExists || !workspaceFirst || commandPathStartsWith({
+          path: parseTomlValue(readTextFile(new File(setup.venvDir, "pyvenv.cfg")), "home")
+        }, installation.python.runtime.installDir);
+        if (!venvExists || !venvManaged) {
+          var venvArgs = [basePython.path, "-m", "venv"];
+          if (venvExists) {
+            venvArgs.push("--clear");
+          }
+          venvArgs.push(setup.venvDir);
+          runInstallStep(venvArgs, 120000, "Vibe virtual environment creation");
         }
         var venvPython = venvBinPath(setup.venvDir, "python");
-        installation.steps.push(runCommand([venvPython, "-m", "pip", "install", "--upgrade", "pip"], { timeoutMs: 180000 }));
-        installation.steps.push(runCommand([venvPython, "-m", "pip", "install", "--upgrade", "mistral-vibe"], { timeoutMs: 600000 }));
+        runInstallStep([venvPython, "-m", "pip", "install", "--upgrade", "pip"], 180000, "Vibe pip bootstrap", "https://pypi.org");
+        runInstallStep([venvPython, "-m", "pip", "install", "--upgrade", "mistral-vibe"], 600000, "Vibe runtime installation", "https://pypi.org");
+
+        setup = detectRuntime(options);
+        var managedVibeReady = commandPathStartsWith(setup.vibe, setup.venvDir) && commandPathStartsWith(setup.vibeAcp, setup.venvDir);
+        if (!managedVibeReady) {
+          throw new Error("Vibe installation completed without runnable managed vibe and vibe-acp commands in " + setup.venvDir);
+        }
+        installation.installed = true;
       }
     } catch (e) {
       messages.push(String(e));
       setup = detectRuntime(options);
-      if (workspaceFirst && setup.vibe.found && setup.vibeAcp.found && !forceVibeInstall) {
+      if (!workspaceFirst && setup.vibe.found && setup.vibeAcp.found && !forceVibeInstall) {
         messages.push("Workspace Vibe install failed; using user PATH fallback.");
         installation.error = String(e);
         var fallbackSkills = installAgentSkills(options, "vibe", setup.vibeHome);
@@ -69,12 +119,19 @@
         if (fallbackSkills.error) {
           messages.push(fallbackSkills.error);
         }
+        var fallbackAuthentication = inspectVibeAuthentication(setup.vibeHome);
+        var fallbackReady = fallbackAuthentication.configured === true;
+        if (!fallbackReady) {
+          messages.push("Vibe authentication is required. Configure MISTRAL_API_KEY in the Vibe profile.");
+        }
         return {
-          ok: true,
-          status: "ready",
+          ok: fallbackReady,
+          status: fallbackReady ? "ready" : "authentication_required",
           phase: "fallback",
           setup: setup,
+          authentication: fallbackAuthentication,
           installation: installation,
+          bootstrap: bootstrap,
           skills: fallbackSkills,
           messages: messages,
           timestamp: now()
@@ -87,13 +144,21 @@
         error: String(e),
         setup: setup,
         installation: installation,
+        bootstrap: bootstrap,
         messages: messages,
         timestamp: now()
       };
     }
 
     setup = detectRuntime(options);
-    var ready = setup.vibe.found && setup.vibeAcp.found;
+    var runtimeReady = setup.vibe.found && setup.vibeAcp.found && (!workspaceFirst || (
+      commandPathStartsWith(setup.vibe, setup.venvDir) && commandPathStartsWith(setup.vibeAcp, setup.venvDir)
+    ));
+    var authentication = inspectVibeAuthentication(setup.vibeHome);
+    var ready = runtimeReady && authentication.configured === true;
+    if (runtimeReady && !ready) {
+      messages.push("Vibe authentication is required. Configure MISTRAL_API_KEY in the Vibe profile.");
+    }
     var skills = installAgentSkills(options, "vibe", setup.vibeHome);
     if (!setup.config.selected.valid) {
       messages.push("Selected VIBE_HOME has no valid Convertigo MCP HTTP server config yet");
@@ -106,9 +171,11 @@
     }
     return {
       ok: ready,
-      status: ready ? "ready" : "missing",
+      status: ready ? "ready" : (runtimeReady ? "authentication_required" : "missing"),
       setup: setup,
+      authentication: authentication,
       installation: installation,
+      bootstrap: bootstrap,
       skills: skills,
       messages: messages,
       timestamp: now()
@@ -162,6 +229,30 @@
 
   C8O.agentBridge.vibeStart = function (options) {
     options = options || {};
+    var requestedModel = trim(options.model || options.agentModel);
+    var handle = trim(options.handle) || makeHandle("vibe");
+    var registry = getRegistry();
+    var existing = registry.get(handle);
+    var timeoutMs = intValue(options.requestTimeoutMs, 60000, 1000, 600000);
+    if (existing !== null && typeof existing !== "undefined" && processAlive(existing.process)) {
+      try {
+        configureVibeSession(existing, options, timeoutMs);
+      } catch (configureExistingError) {
+        pushEvent(existing, "warning", {
+          phase: "session/config",
+          message: String(configureExistingError)
+        });
+      }
+      rememberSessionHandle(handle);
+      return {
+        ok: true,
+        status: "already_running",
+        handle: handle,
+        providerSettings: existing.providerSettings || null,
+        state: statusOf(existing),
+        timestamp: now()
+      };
+    }
     var autoConfigure = boolValue(options.autoConfigure, !trim(options.vibeHome).length);
     var setup = C8O.agentBridge.vibeSetup({
       workspaceRoot: options.workspaceRoot,
@@ -172,7 +263,7 @@
       conversationId: options.conversationId,
       projectId: options.projectId,
       mcpEndpoint: options.mcpEndpoint,
-      model: options.model || options.agentModel,
+      model: "",
       install: boolValue(options.install, false),
       pythonPath: options.pythonPath,
       pythonInstallDir: options.pythonInstallDir,
@@ -189,32 +280,22 @@
       configure: autoConfigure
     });
     if (!setup.ok) {
+      var authenticationRequired = setup.status === "authentication_required";
       return {
         ok: false,
-        status: "error",
+        status: authenticationRequired ? "authentication_required" : "error",
         phase: "setup",
-        error: "vibe and vibe-acp are required before start",
+        error: authenticationRequired ? "Vibe authentication is required before start" : "vibe and vibe-acp are required before start",
         setup: setup,
-        timestamp: now()
-      };
-    }
-
-    var handle = trim(options.handle) || makeHandle("vibe");
-    var registry = getRegistry();
-    var existing = registry.get(handle);
-    if (existing !== null && typeof existing !== "undefined" && processAlive(existing.process)) {
-      rememberSessionHandle(handle);
-      return {
-        ok: true,
-        status: "already_running",
-        handle: handle,
-        state: statusOf(existing),
         timestamp: now()
       };
     }
 
     var env = parseObject(options.env, {});
     var vibeHome = setup.setup.vibeHome;
+    if (!trim(options.credentialsPolicy || options.envPolicy).length) {
+      options.credentialsPolicy = "vibe-home";
+    }
     var credentials = applyCredentialsPolicy(env, options, vibeHome);
     if (vibeHome.length) {
       env.VIBE_HOME = vibeHome;
@@ -223,8 +304,8 @@
     var mcpEndpoint = trim(options.mcpEndpoint) || setup.setup.mcpEndpoint || resolveMcpEndpoint(options);
     var command = parseCommand(options.command, [setup.setup.vibeAcp.path || "vibe-acp"]);
     var ttlMillis = intValue(options.ttlSeconds, DEFAULT_TTL_SECONDS, 30, 86400) * 1000;
-    var timeoutMs = intValue(options.requestTimeoutMs, 60000, 1000, 600000);
-    var entry = createEntry(handle, "vibe", "acp", command, cwd, env, ttlMillis, setup.setup.home, credentials, setup.setup.model);
+    var entry = createEntry(handle, "vibe", "acp", command, cwd, env, ttlMillis, setup.setup.home, credentials, requestedModel || setup.setup.model);
+    entry.workspaceRoot = setup.setup.workspaceRoot;
     entry.convertigoRevealMode = revealModeEnabled(options, null);
     registry.put(handle, entry);
 
@@ -261,6 +342,9 @@
           terminal: false,
           auth: {
             terminal: false
+          },
+          session: {
+            configOptions: {}
           }
         }
       }, timeoutMs);
@@ -271,6 +355,15 @@
         mcpServers: buildMcpServers(mcpEndpoint)
       }, timeoutMs);
       entry.sessionId = String(entry.session.sessionId || entry.session.session_id || "");
+      var sessionProvider = vibeSettings({
+        workspaceRoot: setup.setup.workspaceRoot,
+        vibeHome: setup.setup.vibeHome,
+        vibeHomeScope: "explicit",
+        mcpEndpoint: mcpEndpoint,
+        runtimePresenceOnly: true
+      });
+      updateVibeProviderSettings(entry, entry.session.configOptions || entry.session.config_options || [], sessionProvider);
+      configureVibeSession(entry, options, timeoutMs);
       entry.phase = "ready";
       entry.status = "running";
       pushEvent(entry, "acp/session", {
@@ -285,6 +378,7 @@
         handle: handle,
         sessionId: entry.sessionId,
         cursor: entry.nextIndex,
+        providerSettings: entry.providerSettings || null,
         state: statusOf(entry),
         timestamp: now()
       };
@@ -308,6 +402,40 @@
         state: statusOf(entry),
         timestamp: now()
       };
+    }
+  };
+
+  C8O.agentBridge.discoverVibeSettings = function (options, provider) {
+    options = options || {};
+    provider = provider || {};
+    var setup = provider.setup || {};
+    var handle = makeHandle("vibe-settings");
+    var started = null;
+    try {
+      started = C8O.agentBridge.vibeStart({
+        handle: handle,
+        workspaceRoot: trim(options.workspaceRoot || setup.workspaceRoot),
+        vibeHome: trim(options.vibeHome || setup.vibeHome),
+        vibeHomeScope: trim(options.vibeHome || setup.vibeHome).length ? "explicit" : (options.vibeHomeScope || options.homeScope),
+        userId: options.userId,
+        conversationId: options.conversationId,
+        projectId: options.projectId,
+        mcpEndpoint: options.mcpEndpoint,
+        model: "",
+        reasoningEffort: "",
+        install: false,
+        autoConfigure: true,
+        requestTimeoutMs: options.settingsTimeoutMs || options.requestTimeoutMs || 60000
+      });
+      return started && started.ok !== false && started.providerSettings ? started.providerSettings : provider;
+    } catch (e) {
+      provider.source = provider.source || {};
+      provider.source.discoveryError = String(e);
+      return provider;
+    } finally {
+      try {
+        C8O.agentBridge.vibeClose({ handle: handle });
+      } catch (_ignoreVibeSettingsProbeClose) {}
     }
   };
 

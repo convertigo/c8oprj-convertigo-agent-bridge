@@ -5,10 +5,16 @@ responseTimeout: 120
     'include("js/vibe_agent_bridge.js");
     result = C8O.agentBridge.settings({
       provider: typeof provider === "undefined" ? "" : provider,
+      model: typeof model === "undefined" ? "" : model,
+      reasoningEffort: typeof reasoningEffort === "undefined" ? "" : reasoningEffort,
+      serviceTier: typeof serviceTier === "undefined" ? "" : serviceTier,
+      savePreferences: typeof savePreferences === "undefined" ? "" : savePreferences,
       workspaceRoot: typeof workspaceRoot === "undefined" ? "" : workspaceRoot,
       projectId: typeof projectId === "undefined" ? "" : projectId,
       userId: typeof userId === "undefined" ? "" : userId,
       conversationId: typeof conversationId === "undefined" ? "" : conversationId,
+      agentProfile: typeof agentProfile === "undefined" ? "" : agentProfile,
+      skillProfile: typeof skillProfile === "undefined" ? "" : skillProfile,
       mcpEndpoint: typeof mcpEndpoint === "undefined" ? "" : mcpEndpoint,
       codexHome: typeof codexHome === "undefined" ? "" : codexHome,
       codexHomeScope: typeof codexHomeScope === "undefined" ? "" : codexHomeScope,
@@ -86,3 +92,21 @@ responseTimeout: 120
 ↓runtimePresenceOnly [variables.RequestableVariable-1785255717884]: 
   comment: Check only for runtime files without invoking the CLI.
   description: Check only for runtime files without invoking the CLI.
+↓model [variables.RequestableVariable-1787826899462]: 
+  comment: Optional model preference.
+  description: Optional model preference.
+↓reasoningEffort [variables.RequestableVariable-1787826899464]: 
+  comment: Optional reasoningEffort preference.
+  description: Optional reasoningEffort preference.
+↓serviceTier [variables.RequestableVariable-1787826899466]: 
+  comment: Optional serviceTier preference.
+  description: Optional serviceTier preference.
+↓savePreferences [variables.RequestableVariable-1787826899468]: 
+  comment: Optional savePreferences preference.
+  description: Optional savePreferences preference.
+↓agentProfile [variables.RequestableVariable-1787826899470]: 
+  comment: Optional agentProfile preference.
+  description: Optional agentProfile preference.
+↓skillProfile [variables.RequestableVariable-1787826899472]: 
+  comment: Optional skillProfile preference.
+  description: Optional skillProfile preference.

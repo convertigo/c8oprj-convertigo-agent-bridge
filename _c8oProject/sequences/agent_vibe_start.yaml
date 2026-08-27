@@ -17,6 +17,7 @@ comment: Start a long-running vibe-acp process and create an ACP session.
       autoConfigure: typeof autoConfigure === "undefined" ? "" : autoConfigure,
       install: typeof install === "undefined" ? false : install,
       model: typeof model === "undefined" ? "" : model,
+      reasoningEffort: typeof reasoningEffort === "undefined" ? "" : reasoningEffort,
       pythonPath: typeof pythonPath === "undefined" ? "" : pythonPath,
       pythonInstallDir: typeof pythonInstallDir === "undefined" ? "" : pythonInstallDir,
       pythonArchiveUrl: typeof pythonArchiveUrl === "undefined" ? "" : pythonArchiveUrl,
@@ -82,8 +83,8 @@ comment: Start a long-running vibe-acp process and create an ACP session.
   description: Set true to tell the agent to pass reveal=true on supported Convertigo mutation/viewer tools.
   value: false
 ↓credentialsPolicy [variables.RequestableVariable-1781600000213]: 
-  comment: 'Credential injection policy: explicit, user-home, vibe-home, or auto. Defaults to explicit.'
-  description: 'Credential injection policy: explicit, user-home, vibe-home, or auto. Defaults to explicit.'
+  comment: 'Credential injection policy: explicit, user-home, vibe-home, or auto. Defaults to vibe-home for managed profiles.'
+  description: 'Credential injection policy: explicit, user-home, vibe-home, or auto. Defaults to vibe-home for managed profiles.'
 ↓autoConfigure [variables.RequestableVariable-1781600000214]: 
   comment: Set false to avoid writing config.toml before start. Defaults to true when vibeHome is not explicit.
   description: Set false to avoid writing config.toml before start. Defaults to true when vibeHome is not explicit.
@@ -136,5 +137,8 @@ comment: Start a long-running vibe-acp process and create an ACP session.
   comment: Set false to forbid Python downloads and only report missing runtime.
   description: Set false to forbid Python downloads and only report missing runtime.
 ↓forcePythonInstall [variables.RequestableVariable-1781785157790]: 
-  comment: Set true to install the standalone runtime even when another Python is already found.
-  description: Set true to install the standalone runtime even when another Python is already found.
+  comment: Set true to reinstall the workspace-managed standalone Python runtime before Vibe start.
+  description: Set true to reinstall the workspace-managed standalone Python runtime before Vibe start.
+↓reasoningEffort [variables.RequestableVariable-1787647144866]: 
+  comment: Optional Vibe thinking level selected through ACP.
+  description: Optional Vibe thinking level selected through ACP.

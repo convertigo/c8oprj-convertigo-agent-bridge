@@ -33,10 +33,24 @@ same context.
 - Startup environment checks must use `runtimePresenceOnly`. This checks known
   managed paths and `PATH` entries without invoking the CLI; full model
   discovery is deferred until configuration is opened or the agent starts.
+- Provider readiness requires both a usable managed runtime and locally
+  configured authentication. Settings expose only authentication presence,
+  status, source type, and the required action; never expose credential values.
+  Codex accepts a scoped/user `auth.json` or `OPENAI_API_KEY`. Vibe accepts
+  `MISTRAL_API_KEY` from the scoped/user `.vibe/.env` or process environment.
+- When no provider is ready, settings must leave the default provider empty so
+  the Assistant can ask the user to choose Vibe or Codex. Runtime setup may
+  finish with `authentication_required`; session start must stop immediately in
+  that state instead of spawning a process that will fail remotely.
 - Runtime installation and updates are explicit operations. Codex updates use
   the managed `@openai/codex@latest` package and Vibe updates use the managed
   `mistral-vibe` package. Do not silently update a provider while starting or
   resuming a conversation.
+- Runtime archive downloads must use the Convertigo engine HTTP client. Every
+  network-capable child process started by the bridge, including npm, pip,
+  Codex, and Vibe, must receive proxy variables derived from the engine
+  `ProxyManager`, including bypass domains and the local NTLM bridge when
+  applicable. Never log proxy URLs containing credentials.
 - Refresh model capabilities from the installed CLI after setup. A runtime
   update affects new agent processes/conversations; an already running process
   may keep its previous model catalog until it is restarted.
@@ -125,8 +139,9 @@ same context.
   possible, not maintained only as Assistant-side hardcoded values.
 - The contract should describe providers, available models, default model,
   reasoning levels, and support flags such as resume, stop, images, and MCP.
-- Codex remains the priority provider. Vibe should return a degraded but explicit
-  capability set until its CLI exposes equivalent model/settings metadata.
+- Vibe model and reasoning choices come from ACP `session/new.configOptions`
+  and later `config_option_update` events. Do not infer the account-specific
+  catalog only from `config.toml`; cache the ACP result per scoped `VIBE_HOME`.
 - Keep the Convertigo Generalist skill synchronized and forced by setup; it
   should not be a user-visible choice in Studio.
 - `mobile-builder-open` may return `browserDebugUrl`,
@@ -143,6 +158,21 @@ same context.
   - `js/agent_bridge_vibe.js`
   - `js/vibe_agent_bridge.js`
 - Vibe conversations and homes are managed under `<workspaceRoot>/agents/vibe`.
+- Vibe setup is workspace-managed like Codex setup: install or reuse the
+  standalone Python under `<workspaceRoot>/agents/runtimes/python`, create the
+  Vibe venv under `<workspaceRoot>/agents/vibe/.venv` with that Python, and run
+  only the managed `vibe` and `vibe-acp` binaries. External Python/Vibe paths
+  are diagnostic or explicit opt-out fallbacks, not the default runtime.
+- Bootstrap each scoped `VIBE_HOME` by synchronizing `~/.vibe/.env` when it
+  exists. Start Vibe with the `vibe-home` credentials policy by default; do not
+  send the raw Mistral key through Assistant sequence payloads.
+- Apply an Assistant model or thinking selection through ACP
+  `session/set_config_option` after `session/new`. The remote Vibe catalog can
+  also contain account-routed models that are not present in the initial static
+  TOML file.
+- Keep the managed `zai-glm-5-2` preset idempotently present in generated Vibe
+  configs. Vibe does not add every API model to the ACP picker automatically;
+  configured presets are part of the session catalog.
 - In NoCode/C8Oforms contexts, Vibe should resolve home scope by user, not by
   conversation, unless the caller explicitly overrides the scope.
 - Do not add project names into the filesystem path for Codex/Vibe homes.

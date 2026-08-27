@@ -129,22 +129,33 @@ reel.
 
 Le bootstrap Vibe fait :
 
-1. Detection de Python, `uv`, `vibe` et `vibe-acp`, y compris les chemins
-   usuels hors `PATH` du Studio (`~/.local/bin`, `/opt/homebrew/bin`,
-   `/usr/local/bin`).
-2. Si Python est absent et que `install=true`, installation d'un Python
-   standalone dans `<workspace>/agents/runtimes/python/<runtime>`.
-3. Avec `install=true`, creation de `<workspace>/agents/vibe/.venv`, puis
-   installation de `mistral-vibe` via `pip`.
+1. Detection des runtimes geres et des installations externes utiles au
+   diagnostic ou a la migration.
+2. Avec `install=true`, installation ou reutilisation du Python standalone
+   gere dans `<workspace>/agents/runtimes/python/<runtime>`. Un Python systeme
+   ou Homebrew ne remplace pas ce runtime.
+3. Creation de `<workspace>/agents/vibe/.venv` avec ce Python gere, migration
+   automatique d'un ancien venv systeme, puis installation de `mistral-vibe`
+   via `pip`.
 4. Avec `configure=true`, ecriture de
    `<workspace>/agents/vibe/.vibe-home/config.toml` avec le MCP Convertigo en
    HTTP. Si `mcpEndpoint` est vide, il est calcule depuis l'endpoint Convertigo
    courant.
-5. Demarrage de `vibe-acp` avec ce `VIBE_HOME`, puis handshake ACP
+5. Synchronisation de `~/.vibe/.env` vers le `VIBE_HOME` scope quand le fichier
+   existe, comme les fichiers d'authentification Codex sont synchronises vers
+   chaque `CODEX_HOME` gere.
+6. Demarrage du `vibe-acp` gere avec ce `VIBE_HOME`, puis handshake ACP
    `initialize` + `session/new`.
+7. Lecture du catalogue `configOptions` retourne par la session ACP. Les
+   modeles routes par le compte Vibe, leurs libelles et les niveaux de
+   raisonnement sont exposes a l'Assistant et caches par `VIBE_HOME` pendant
+   six heures. Un modele choisi est applique au process vivant avec
+   `session/set_config_option`, sans regenerer une definition TOML approximative.
+8. Ajout idempotent du preset `zai-glm-5-2` dans le `config.toml` gere. Vibe
+   l'expose alors dans son catalogue ACP avec les tarifs publics Mistral.
 
-Vibe 2.9.6 charge aussi sa config `config.toml`; le champ ACP `mcpServers` seul
-ne suffit pas. Le setup local configure donc explicitement le MCP dans le
+Vibe charge aussi sa config `config.toml`; le champ ACP `mcpServers` seul ne
+suffit pas. Le setup local configure donc explicitement le MCP dans le
 `VIBE_HOME` utilise par le process.
 
 ## Runtime Python workspace-local
@@ -156,11 +167,15 @@ projet. Par defaut :
 <workspace>/agents/runtimes/python/cpython-3.12.13-20260610-<platform>
 ```
 
-Le setup utilise d'abord un Python deja disponible (`pythonPath`, `PYTHON`,
-venv local, `~/.local/bin`, Homebrew, `python3`, `python`). Si aucun Python
-n'est trouve et que `install=true`, il telecharge une archive
-`python-build-standalone` via le client HTTP du moteur Convertigo, donc avec la
-configuration proxy du serveur. Le telechargement peut etre remplace par :
+Avec `install=true`, le setup utilise en priorite le Python gere du workspace
+et le telecharge s'il est absent, meme si un Python systeme est disponible.
+Une installation externe reste visible pour le diagnostic et peut etre
+explicitement autorisee avec `workspaceInstallFirst=false`. L'archive
+`python-build-standalone` est telechargee via le client HTTP du moteur
+Convertigo. Le bridge applique aussi le proxy a chaque requete et reevalue un
+eventuel PAC apres chaque redirection. Le proxy basic est authentifie et le mode
+NTLM manuel passe par le bridge NTLM local de Convertigo. Le telechargement peut
+etre remplace par :
 
 - `pythonArchiveUrl` : URL directe de l'archive.
 - `pythonAssetUrlPrefix` ou `pythonMirrorBaseUrl` : prefixe d'un miroir
@@ -174,6 +189,15 @@ workspace Convertigo.
 
 Cette installation est partageable par les providers. Les venvs restent separes
 par agent, par exemple `<workspace>/agents/vibe/.venv`.
+
+Les commandes externes lancees par le bridge recoivent aussi la configuration
+proxy du moteur Convertigo. Cela couvre `pip`, les controles PyPI, `npm`, puis
+les processus Vibe et Codex eux-memes pour leurs appels distants. Le bridge
+propage `HTTP_PROXY`, `HTTPS_PROXY`, leurs variantes minuscules, `NO_PROXY`, les
+variables npm et `PIP_PROXY`. L'authentification basic est encodee dans l'URL et
+le mode NTLM manuel utilise le proxy local `NtlmConnectProxyBridge`. En mode PAC,
+le proxy est evalue pour la destination principale (PyPI, registre npm, OpenAI
+ou Mistral).
 
 ## Runtime Codex workspace-local
 
@@ -273,11 +297,10 @@ chaque process peut utiliser un `VIBE_HOME` separe. Le client choisit avec
 hashes dans les chemins afin de ne pas exposer directement un email ou login
 dans le filesystem.
 
-Les credentials sont separes de ce choix de home. `agent_vibe_start` accepte
-`credentialsPolicy` :
+Le setup synchronise `~/.vibe/.env` vers chaque `VIBE_HOME` gere. Le demarrage
+utilise donc `vibe-home` par defaut et accepte aussi `credentialsPolicy` :
 
-- `explicit` : uniquement les variables passees dans `env`, comportement par
-  defaut.
+- `explicit` : uniquement les variables passees dans `env`.
 - `user-home` : injecte les variables trouvees dans `~/.vibe/.env`.
 - `vibe-home` : injecte les variables trouvees dans le `.env` du `VIBE_HOME`
   choisi.
@@ -288,12 +311,13 @@ status, seuls les noms de variables injectees le sont.
 
 ## Validation locale
 
-Validation faite le 2026-06-15 sur le port hotfix local de developpement :
+Validation faite le 2026-08-24 sur le port hotfix local de developpement :
 
-- `agent_vibe_setup install=false configure=false` detecte Python 3.14.5,
-  `uv` 0.11.5, `vibe` 2.9.6 et `vibe-acp` 2.9.6.
-- Le `VIBE_HOME` local valide est
-  `/Users/nicolas/git/agents/vibe/.vibe-home`.
+- `agent_vibe_setup install=true configure=true` installe Python 3.12.13 dans
+  `agents/runtimes/python`, recree le venv avec ce runtime et detecte `vibe` et
+  `vibe-acp` 2.24.3 sous `agents/vibe/.venv`.
+- Le `VIBE_HOME` utilisateur recoit une copie de `~/.vibe/.env` sans exposer la
+  valeur de la cle dans le payload de demarrage.
 - Un `VIBE_HOME` explicite isole sous
   `/Users/nicolas/git/agents/vibe/homes/test-explicit/.vibe-home` est configure
   correctement et passe `initialize` + `session/new`.

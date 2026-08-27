@@ -45,8 +45,8 @@ responseTimeout: 900
         - ↑mode: PLAIN
         - →→: result
 ↓install [variables.RequestableVariable-1781600000103]: 
-  comment: Set true to create a workspace-local Python venv and install mistral-vibe when missing.
-  description: Set true to create a workspace-local Python venv and install mistral-vibe when missing.
+  comment: Set true to install or reuse managed Python and install Vibe in the workspace-local venv.
+  description: Set true to install or reuse managed Python and install Vibe in the workspace-local venv.
 ↓configure [variables.RequestableVariable-1781600000104]: 
   comment: Set true to write the local VIBE_HOME config.toml with the Convertigo MCP HTTP endpoint.
   description: Set true to write the local VIBE_HOME config.toml with the Convertigo MCP HTTP endpoint.
@@ -111,8 +111,8 @@ responseTimeout: 900
   comment: Set false to forbid Python downloads and only report missing runtime.
   description: Set false to forbid Python downloads and only report missing runtime.
 ↓forcePythonInstall [variables.RequestableVariable-1781785157675]: 
-  comment: Set true to install the standalone runtime even when another Python is already found.
-  description: Set true to install the standalone runtime even when another Python is already found.
+  comment: Set true to reinstall the workspace-managed standalone Python runtime before Vibe setup.
+  description: Set true to reinstall the workspace-managed standalone Python runtime before Vibe setup.
 ↓forceVibeInstall [variables.RequestableVariable-1781785157677]: 
   comment: Set true to install or update the workspace-local Vibe venv even when Vibe is already found in PATH.
   description: Set true to install or update the workspace-local Vibe venv even when Vibe is already found in PATH.

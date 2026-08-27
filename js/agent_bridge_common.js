@@ -83,6 +83,7 @@
   var HashMap = Packages.java.util.HashMap;
   var ConcurrentHashMap = Packages.java.util.concurrent.ConcurrentHashMap;
   var LinkedHashMap = Packages.java.util.LinkedHashMap;
+  var Base64 = Packages.java.util.Base64;
   var Collections = Packages.java.util.Collections;
   var TimeUnit = Packages.java.util.concurrent.TimeUnit;
   var Files = Packages.java.nio.file.Files;
@@ -111,6 +112,16 @@
       return "";
     }
     return String(value).replace(/^\s+|\s+$/g, "");
+  }
+
+  function firstNonBlank(values) {
+    for (var i = 0; values && i < values.length; i++) {
+      var value = trim(values[i]);
+      if (value.length) {
+        return value;
+      }
+    }
+    return "";
   }
 
   function requestParameter(name) {
@@ -149,6 +160,7 @@
       "formId", "pageId", "applicationId", "currentPage", "currentApplicationId",
       "codexHomeScope", "vibeHomeScope", "homeScope", "codexHome", "vibeHome", "agentHome",
       "mcpEndpoint", "workspaceRoot", "settingsTimeoutMs", "modelsTimeoutMs",
+      "model", "reasoningEffort", "reasoningLevel", "serviceTier", "savePreferences",
       "checkUpdates", "refreshUpdateCheck", "updateCheckTimeoutMs", "updateCheckCacheMs", "runtimePresenceOnly",
       "codexRuntimeMode", "codexProtocol",
       "agentRevealMode", "convertigoRevealMode", "uiRevealMode", "revealMode",
@@ -228,6 +240,45 @@
     ].join("\n");
   }
 
+  function withManagedGuidancePreflight(promptText, options) {
+    var text = String(promptText || "");
+    var marker = "Convertigo managed preflight for this turn";
+    if (text.indexOf(marker) !== -1) {
+      return text;
+    }
+    options = options || {};
+    var endpoint = trim(options.mcpEndpoint);
+    var lines = [
+      marker + ":",
+      "- Scoped agent setup status: current.",
+      "- Current Convertigo guidance version: " + MCP_GUIDANCE_VERSION + ".",
+      "- Do not call `_setupCodex`, do not update the global Codex home, and do not repeat setup for this turn.",
+      "- Treat guidance mismatch warnings from earlier conversation turns as stale. React only if a current Convertigo MCP call returns a new mismatch warning."
+    ];
+    if (endpoint.length) {
+      lines.splice(2, 0, "- Current Convertigo MCP endpoint: " + endpoint + ".");
+    }
+    lines.push("");
+    lines.push(text);
+    return lines.join("\n");
+  }
+
+  function managedMcpTransportEndpoint(endpoint) {
+    var text = trim(endpoint);
+    var fragment = "";
+    var hash = text.indexOf("#");
+    if (hash >= 0) {
+      fragment = text.substring(hash);
+      text = text.substring(0, hash);
+    }
+    if (/(^|[?&])jsonOnly=[^&]*/i.test(text)) {
+      text = text.replace(/(^|[?&])jsonOnly=[^&]*/i, "$1jsonOnly=true");
+    } else {
+      text += (text.indexOf("?") >= 0 ? "&" : "?") + "jsonOnly=true";
+    }
+    return text + fragment;
+  }
+
   function intValue(value, defaultValue, minValue, maxValue) {
     var parsed = parseInt(trim(value), 10);
     if (isNaN(parsed)) {
@@ -302,6 +353,128 @@
         pbEnv.put(String(key), String(env[key]));
       }
     }
+  }
+
+  function proxyEnvironmentFromSettings(settings) {
+    settings = settings || {};
+    if (settings.enabled !== true || settings.direct === true || !trim(settings.host).length || Number(settings.port || 0) <= 0) {
+      return {};
+    }
+    var method = trim(settings.method).toLowerCase();
+    var proxyUrl = trim(settings.localProxyUrl);
+    if (!proxyUrl.length) {
+      var credentials = "";
+      if (method === "basic" && trim(settings.user).length) {
+        credentials = encodeURIComponent(String(settings.user)) + ":" + encodeURIComponent(String(settings.password || "")) + "@";
+      }
+      proxyUrl = "http://" + credentials + trim(settings.host) + ":" + Number(settings.port);
+    }
+    var noProxy = trim(settings.noProxy);
+    return {
+      HTTP_PROXY: proxyUrl,
+      HTTPS_PROXY: proxyUrl,
+      NO_PROXY: noProxy,
+      http_proxy: proxyUrl,
+      https_proxy: proxyUrl,
+      no_proxy: noProxy,
+      npm_config_proxy: proxyUrl,
+      npm_config_https_proxy: proxyUrl,
+      PIP_PROXY: proxyUrl
+    };
+  }
+
+  function engineProxySettings(targetUrl) {
+    var settings = {
+      enabled: false,
+      direct: false,
+      mode: "off",
+      method: "anonymous",
+      host: "",
+      port: 0,
+      user: "",
+      password: "",
+      noProxy: "",
+      localProxyUrl: ""
+    };
+    try {
+      var manager = Engine.theApp && Engine.theApp.proxyManager;
+      if (!manager || !manager.isEnabled()) {
+        return settings;
+      }
+      settings.mode = trim(manager.proxyMode).toLowerCase();
+      settings.method = trim(manager.proxyMethod).toLowerCase();
+      settings.user = String(manager.getProxyUser() || "");
+      settings.password = String(manager.getProxyPassword() || "");
+      var bypass = manager.getBypassDomains();
+      var bypassValues = [];
+      for (var i = 0; bypass !== null && i < bypass.length; i++) {
+        var domain = trim(bypass[i]);
+        if (domain.length) {
+          bypassValues.push(domain);
+        }
+      }
+      settings.noProxy = bypassValues.join(",");
+      if (settings.mode === "manual") {
+        settings.host = String(manager.getProxyServer() || "");
+        settings.port = Number(manager.getProxyPort() || 0);
+      } else if (settings.mode === "auto") {
+        var target = trim(targetUrl);
+        if (!target.length) {
+          return settings;
+        }
+        var uri = new Packages.java.net.URI(target);
+        var pac = manager.getPacInfos(target, String(uri.getHost()));
+        if (pac === null) {
+          settings.direct = true;
+          return settings;
+        }
+        settings.host = String(pac.getServer() || "");
+        settings.port = Number(pac.getPort() || 0);
+      }
+      settings.enabled = settings.host.length > 0 && settings.port > 0;
+      if (settings.enabled && settings.method === "ntlm" && settings.mode === "manual") {
+        settings.localProxyUrl = String(Packages.com.twinsoft.convertigo.engine.proxy.ntlm.NtlmConnectProxyBridge.getLocalProxyUrl());
+      }
+    } catch (_ignoreEngineProxySettings) {}
+    return settings;
+  }
+
+  function applyEngineProxyEnvironment(pbEnv, targetUrl) {
+    var settings = engineProxySettings(targetUrl);
+    envObjectToMap(pbEnv, proxyEnvironmentFromSettings(settings));
+    return settings;
+  }
+
+  function configureHttpRequestProxy(request, configBuilder, targetUrl) {
+    var settings = engineProxySettings(targetUrl);
+    var proxyEnv = proxyEnvironmentFromSettings(settings);
+    var proxyUrl = trim(proxyEnv.HTTPS_PROXY);
+    if (!proxyUrl.length) {
+      return settings;
+    }
+    if (settings.method === "ntlm" && !trim(settings.localProxyUrl).length) {
+      throw new Error("The PAC-selected NTLM proxy cannot be exposed to this HTTP request");
+    }
+    var proxyUri = new Packages.java.net.URI(proxyUrl);
+    configBuilder.setProxy(new Packages.org.apache.http.HttpHost(String(proxyUri.getHost()), Number(proxyUri.getPort())));
+    if (settings.method === "basic" && trim(settings.user).length) {
+      var credentials = String(settings.user) + ":" + String(settings.password || "");
+      var encoded = Packages.java.util.Base64.getEncoder().encodeToString(new Packages.java.lang.String(credentials).getBytes(StandardCharsets.UTF_8));
+      request.setHeader("Proxy-Authorization", "Basic " + String(encoded));
+    }
+    return settings;
+  }
+
+  function agentProxyTargetUrl(provider, env) {
+    env = env || {};
+    var normalized = normalizeProvider(provider);
+    if (normalized === "codex") {
+      return trim(env.OPENAI_BASE_URL || env.CODEX_API_BASE_URL) || "https://api.openai.com";
+    }
+    if (normalized === "vibe") {
+      return trim(env.MISTRAL_BASE_URL || env.MISTRAL_API_URL) || "https://api.mistral.ai";
+    }
+    return "";
   }
 
   function filePath(file) {
@@ -454,9 +627,10 @@
       if (name.indexOf(".") < 0) {
         name += ".exe";
       }
-      return childPath(childPath(venvDir, "Scripts"), name);
+      return String(new File(new File(venvDir, "Scripts"), name).getAbsolutePath());
     }
-    return childPath(childPath(venvDir, "bin"), name);
+    // Canonicalizing bin/python follows its symlink outside the venv and makes pip target the system Python.
+    return String(new File(new File(venvDir, "bin"), name).getAbsolutePath());
   }
 
   function ensureDirectory(file) {
@@ -1512,18 +1686,41 @@
     };
   }
 
-  function patchCodexMcpConfigText(existingText, mcpEndpoint, options, guidanceVersion) {
+  function codexSkillGuidanceVersion(homePath, options) {
+    var home = trim(homePath);
+    if (!home.length) {
+      return MCP_GUIDANCE_VERSION;
+    }
+    var preferred = managedSkillSlug(normalizeSkillProfile(options || {}));
+    var slugs = [preferred, "convertigo-generalist", "convertigo-nocode"];
+    var seen = {};
+    for (var i = 0; i < slugs.length; i++) {
+      var slug = trim(slugs[i]);
+      if (!slug.length || seen[slug]) {
+        continue;
+      }
+      seen[slug] = true;
+      var skillFile = new File(new File(new File(home), "skills"), slug + File.separator + "SKILL.md");
+      var source = readTextFile(skillFile);
+      var match = /^- Skill guidance version:\s*`([^`]+)`\./m.exec(source);
+      if (match !== null && trim(match[1]).length) {
+        return trim(match[1]);
+      }
+    }
+    return MCP_GUIDANCE_VERSION;
+  }
+
+  function patchCodexMcpConfigText(existingText, mcpEndpoint, options, homePath) {
     options = options || {};
     var text = String(existingText == null ? "" : existingText).replace(/\r\n?/g, "\n");
     var lines = trim(text).length ? splitTextLines(text) : [];
     var serverName = managedMcpServerName(options);
     var sectionName = "mcp_servers." + serverName;
     var range = findTomlSectionRange(lines, sectionName);
-    var urlLine = 'url = "' + tomlEscape(mcpEndpoint) + '"';
+    var urlLine = 'url = "' + tomlEscape(managedMcpTransportEndpoint(mcpEndpoint)) + '"';
     var timeoutLine = "startup_timeout_sec = 60";
     var enabledLine = "enabled = true";
-    var effectiveGuidanceVersion = trim(guidanceVersion) || MCP_GUIDANCE_VERSION;
-    var guidanceHeaderEntry = '"X-Convertigo-Guidance-Version" = "' + tomlEscape(effectiveGuidanceVersion) + '"';
+    var guidanceHeaderEntry = '"X-Convertigo-Guidance-Version" = "' + tomlEscape(codexSkillGuidanceVersion(homePath, options)) + '"';
     var viewerDebugPort = intValue(options.viewerDebugPort, 0, 0, 65535);
     var viewerDebugPortHeaderEntry = viewerDebugPort >= 1024
       ? '"X-Convertigo-Viewer-Debug-Port" = "' + tomlEscape(String(viewerDebugPort)) + '"'
@@ -1736,6 +1933,8 @@
       "",
       "## Mandatory bootstrap",
       "",
+      "Bootstrap is required once per agent conversation for a given MCP endpoint and guidance version, not once per user message. On follow-up turns, reuse the skill, capabilities, and route guides already present in the conversation context. Do not reopen this `SKILL.md`, reread `convertigo://capabilities`, or reread an already-used guide unless the MCP endpoint changed, the MCP reports a guidance-version mismatch, or the required bootstrap context is explicitly unavailable.",
+      "",
       "1. Read `convertigo://capabilities` directly and verify the skill freshness rule above.",
       "2. Do not call `resources/list`, `resources/templates/list`, or `prompts/list` when this skill already names the required URI or tool. Use catalog discovery only when the task cannot be routed from this skill, a named resource is missing, or the MCP reports a guidance mismatch.",
       "3. Select the smallest matching route and read only its entry recipe before mutation:",
@@ -1753,6 +1952,13 @@
       "- Do not repeat catalog, guide, palette, tree, builder, or browser reads whose answer is already present in the current conversation.",
       "- Use `palette-list` to locate an unfamiliar object type and `palette-describe` only for properties that remain uncertain. Group independent descriptions when the caller can do so safely.",
       "- Build one coherent mutation plan before the first write. Prefer one optimized `batch-call` for independent or ordered source-object changes, followed by one targeted readback.",
+      "- A class/property shape already used successfully in the current conversation or returned by a targeted tree read is a confirmed contract. Do not reconfirm it through palette calls or tool-metadata inspection.",
+      "- Common NGX contracts that do not require palette discovery are `UIStyle#UIStyle.styleContent`, `UIAttribute#UIAttribute.attrName/attrValue`, `UIDynamicElement#TextItem`, and `UIText#UIText.textValue`.",
+      "- For one intent spanning independent targets, call `batch-call` with `{calls:[{tool:\"databaseobject-tree-apply\",arguments:{...}}],onError:\"stop\",optimizeMutations:true}`. The optimized batch performs one final refresh, save, and mobile-builder notification.",
+      "- Named core tools in this skill are already routed. Do not inspect `ALL_TOOLS` merely to rediscover the signatures of `batch-call`, `mobile-builder-open`, or Playwright snapshot/find/evaluate calls.",
+      "- For `databaseobject-tree-get`, use `childrenDepth` for recursive descendants and request the needed subtree once instead of walking one QName level per call. `depth` is accepted only as a compatibility alias.",
+      "- For `databaseobject-tree-apply` with `at:\"inside\"`, `tree` is the one child being created and must include its own `className` and `name`; never submit a children-only wrapper. Put sibling creations in separate optimized `batch-call` entries.",
+      "- For an unfamiliar NGX object, call `palette-list` with the exact intended parent QName as `target`, then pass its returned logical `className` unchanged to `palette-describe`. Do not list at project scope and guess a `#logicalId`.",
       "- Start the viewer asynchronously once UI work is known. Finish the source mutations while it builds, then perform one readiness check and one acceptance-oriented browser proof. Add another cycle only when the proof identifies a concrete defect.",
       "- A browser proof should evaluate all relevant acceptance criteria together when practical: visible content, layout/style, interaction or timed state, and console/runtime errors.",
       "- Stop after the requested behavior is green. Do not add an unsolicited polish pass or repeat proof that cannot change the conclusion.",
@@ -1773,6 +1979,8 @@
       "- For a new UI project, validate the name, run `marketplace-import` with that exact name, open the viewer immediately with `mobile-builder-open(wait=false)`, then continue with `upsert-crud` and the staged UI kit while the builder warms up.",
       "- For an existing deterministic CRUD project that is already green, use the edit rail: `crud-status` -> optional early `mobile-builder-open(wait=false)` when UI work is likely -> `upsert-crud` -> backend `crud-proof` -> one `upsert-ngx-crud-kit stage=final` -> `mobile-builder-open(stateOnly=true, wait=true)` -> final `crud-proof(viewerUrl)` -> optional `project-save`.",
       "- For a low-detail CRUD prompt, stop after the first green scaffold + demo data: starter import, viewer open, `upsert-crud`, backend proof, `upsert-ngx-crud-kit` bootstrap/final, final UI proof, optional `project-save`, then return.",
+      "- The low-detail stop rule applies only when the user requested generic CRUD. Before mutation, list the explicit acceptance behaviors from the request. Filters, counters, domain actions, dashboards, or other named interactions are not proven by the presence of fields or a generic list/detail/form shell; implement and validate each one before claiming completion.",
+      "- If the CRUD kit has no declarative hint for an explicit interaction, treat the generated kit as a starting point and perform one focused source-object extension before the final builder and browser proof.",
       "- When relations are obvious, declare them explicitly in `spec.relations[]` instead of relying only on flat FK fields. Prefer entity UI hints such as `ui.relationFields` over direct edits on generated CRUD-kit components.",
       "- Prefer `seed.data` for explicit business demo rows. Do not patch `init_schema` manually after generation when `seed.data` can express the dataset in the spec.",
       "- Once the CRUD guides already documented the contract, do not grep the local workspace to rediscover the shapes of `relations[]`, `ui.relationFields`, or `seed.data`.",
@@ -1996,13 +2204,7 @@
         var delegated = setupCodexFromMcpProject(options, codexHome, report.resolvedMcpUrl, profile);
         if (delegated.attempted === true && delegated.ok === true) {
           var delegatedConfig = readTextFile(configFile);
-          var delegatedGuidanceVersion = installedSkillGuidanceVersion(delegated.skillPath || filePath(skillFile));
-          var delegatedPatch = patchCodexMcpConfigText(
-            delegatedConfig,
-            delegated.resolvedMcpUrl,
-            options,
-            delegatedGuidanceVersion
-          );
+          var delegatedPatch = patchCodexMcpConfigText(delegatedConfig, delegated.resolvedMcpUrl, options, codexHome);
           if (delegatedPatch.status !== "unchanged" && report.dryRun !== true) {
             writeTextFile(configFile, delegatedPatch.text);
           }
@@ -2083,13 +2285,7 @@
         }
       }
       var existingConfig = readTextFile(configFile);
-      var installedGuidanceVersion = installedProfileGuidanceVersion(codexHome, options);
-      var patchedConfig = patchCodexMcpConfigText(
-        existingConfig,
-        report.resolvedMcpUrl,
-        options,
-        installedGuidanceVersion
-      );
+      var patchedConfig = patchCodexMcpConfigText(existingConfig, report.resolvedMcpUrl, options, codexHome);
       if (patchedConfig.status !== "unchanged" && report.dryRun !== true) {
         writeTextFile(configFile, patchedConfig.text);
       }
@@ -2276,8 +2472,7 @@
         ""
       ].join("\n");
     }
-    var installedGuidanceVersion = installedProfileGuidanceVersion(configFile.getParentFile(), options || {});
-    var patched = patchCodexMcpConfigText(text, endpoint, options || {}, installedGuidanceVersion);
+    var patched = patchCodexMcpConfigText(text, endpoint, options || {}, configFile.getParentFile());
     if (patched.status === "unchanged") {
       return false;
     }
@@ -2303,7 +2498,7 @@
     report.copied.push(filename);
   }
 
-  function syncCodexUserFile(sourceDir, targetDir, filename, report) {
+  function syncAgentUserFile(sourceDir, targetDir, filename, report, force) {
     var source = new File(sourceDir, filename);
     if (!source.isFile()) {
       return;
@@ -2322,6 +2517,14 @@
           return;
         }
       } catch (_ignoreCodexHash) {}
+      if (force !== true) {
+        try {
+          if (Number(source.lastModified()) <= Number(target.lastModified())) {
+            report.reused.push(filename);
+            return;
+          }
+        } catch (_ignoreCodexTimestamp) {}
+      }
       copyFileBinary(source, target);
       if (!report.refreshed) {
         report.refreshed = [];
@@ -2333,6 +2536,73 @@
     report.copied.push(filename);
   }
 
+  function newestAgentUserFile(directories, filename) {
+    var selected = null;
+    for (var i = 0; directories && i < directories.length; i++) {
+      var candidate = new File(directories[i], filename);
+      if (!candidate.isFile()) {
+        continue;
+      }
+      if (selected === null || Number(candidate.lastModified()) > Number(selected.lastModified())) {
+        selected = candidate;
+      }
+    }
+    return selected;
+  }
+
+  function syncNewestAgentUserFile(sourceDirs, targetDir, filename, report) {
+    var source = newestAgentUserFile(sourceDirs, filename);
+    if (source === null) {
+      return;
+    }
+    syncAgentUserFile(source.getParentFile(), targetDir, filename, report);
+  }
+
+  function newestUsableCodexAuthFile(directories) {
+    var selected = null;
+    for (var i = 0; directories && i < directories.length; i++) {
+      var candidate = new File(directories[i], "auth.json");
+      var state = codexAuthFileState(candidate);
+      if (!state.exists || state.expired) {
+        continue;
+      }
+      if (selected === null || Number(candidate.lastModified()) > Number(selected.lastModified())) {
+        selected = candidate;
+      }
+    }
+    return selected;
+  }
+
+  function syncCodexAuthenticationFile(sourceDirs, targetDir, report) {
+    var source = newestUsableCodexAuthFile(sourceDirs);
+    if (source === null) {
+      syncNewestAgentUserFile(sourceDirs, targetDir, "auth.json", report);
+      return;
+    }
+    var targetState = codexAuthFileState(new File(targetDir, "auth.json"));
+    syncAgentUserFile(source.getParentFile(), targetDir, "auth.json", report, targetState.exists && targetState.expired);
+    report.authenticationSource = filePath(source.getParentFile());
+    report.authenticationImported = !targetState.exists || targetState.expired;
+  }
+
+  function codexCredentialSourceDirs(options, homeDir) {
+    options = options || {};
+    var sources = [];
+    var workspaceRoot = resolveWorkspaceRoot(options);
+    var installDir = normalizeDirectory(options.installDir, childPath(workspaceRoot, "agents/codex"), workspaceRoot);
+    var userHome = resolveCodexHome({
+      workspaceRoot: workspaceRoot,
+      installDir: installDir,
+      codexHomeScope: "user",
+      userId: trim(options.userId) || contextUserId()
+    }, installDir);
+    if (trim(userHome.path).length && filePath(new File(userHome.path)) !== filePath(homeDir)) {
+      sources.push(new File(userHome.path));
+    }
+    sources.push(new File(String(System.getProperty("user.home")), ".codex"));
+    return sources;
+  }
+
   function bootstrapCodexHome(options, homePath, mcpEndpoint) {
     var report = {
       attempted: false,
@@ -2342,6 +2612,8 @@
       reused: [],
       refreshed: [],
       generated: [],
+      authenticationSource: "",
+      authenticationImported: false,
       message: "",
       error: ""
     };
@@ -2354,10 +2626,10 @@
       var homeDir = new File(report.home);
       migrateLegacyHiddenCodexHome(homeDir, report);
       ensureDirectory(homeDir);
-      var userCodex = new File(String(System.getProperty("user.home")), ".codex");
-      syncCodexUserFile(userCodex, homeDir, "auth.json", report);
-      syncCodexUserFile(userCodex, homeDir, "auth.json.api", report);
-      syncCodexUserFile(userCodex, homeDir, "installation_id", report);
+      var credentialSources = codexCredentialSourceDirs(options, homeDir);
+      syncCodexAuthenticationFile(credentialSources, homeDir, report);
+      syncNewestAgentUserFile(credentialSources, homeDir, "auth.json.api", report);
+      syncNewestAgentUserFile(credentialSources, homeDir, "installation_id", report);
       var configFile = new File(homeDir, "config.toml");
       var capabilityProfile = agentCapabilityProfile(options || {});
       if (capabilityProfile.id === "nocode") {
@@ -2383,6 +2655,36 @@
       report.ok = false;
       report.error = String(e);
       report.message = "Unable to bootstrap scoped CODEX_HOME";
+    }
+    return report;
+  }
+
+  function bootstrapVibeHome(homePath) {
+    var report = {
+      attempted: false,
+      ok: true,
+      home: trim(homePath),
+      copied: [],
+      reused: [],
+      refreshed: [],
+      message: "",
+      error: ""
+    };
+    if (!report.home.length) {
+      report.message = "Default VIBE_HOME selected; bootstrap skipped";
+      return report;
+    }
+    report.attempted = true;
+    try {
+      var homeDir = new File(report.home);
+      ensureDirectory(homeDir);
+      var userVibe = new File(String(System.getProperty("user.home")), ".vibe");
+      syncAgentUserFile(userVibe, homeDir, ".env", report);
+      report.message = "Scoped VIBE_HOME credentials synchronized";
+    } catch (e) {
+      report.ok = false;
+      report.error = String(e);
+      report.message = "Unable to bootstrap scoped VIBE_HOME";
     }
     return report;
   }
@@ -2423,6 +2725,300 @@
     }
     result.keys.sort();
     return result;
+  }
+
+  function environmentHasValue(name) {
+    try {
+      return trim(System.getenv(name)).length > 0;
+    } catch (_ignoreEnvironmentValue) {
+      return false;
+    }
+  }
+
+  function fileHasContent(file) {
+    try {
+      return file !== null && file.isFile() && Number(file.length()) > 2;
+    } catch (_ignoreFileContent) {
+      return false;
+    }
+  }
+
+  function authenticationInfo(configured, method, action, status) {
+    return {
+      configured: configured === true,
+      status: trim(status) || (configured === true ? "configured" : "missing"),
+      method: configured === true ? String(method || "configured") : "",
+      action: configured === true ? "" : String(action || "")
+    };
+  }
+
+  function decodeJwtPayload(token) {
+    try {
+      var parts = trim(token).split(".");
+      if (parts.length < 2) {
+        return null;
+      }
+      var bytes = Base64.getUrlDecoder().decode(String(parts[1]));
+      return parseJsonSafe(String(new Packages.java.lang.String(bytes, StandardCharsets.UTF_8)), null);
+    } catch (_ignoreJwtPayload) {
+      return null;
+    }
+  }
+
+  function codexAuthFileState(file) {
+    if (!fileHasContent(file)) {
+      return { exists: false, expired: false, expiresAt: 0, updatedAt: 0 };
+    }
+    var parsed = readJsonFile(file) || {};
+    var tokens = parsed.tokens || {};
+    var payload = decodeJwtPayload(tokens.access_token);
+    var expiresAt = payload && Number(payload.exp) > 0 ? Number(payload.exp) * 1000 : 0;
+    return {
+      exists: true,
+      expired: expiresAt > 0 && expiresAt <= now() + 60000,
+      expiresAt: expiresAt,
+      updatedAt: Number(file.lastModified() || 0),
+      hasRefreshToken: trim(tokens.refresh_token).length > 0
+    };
+  }
+
+  function inspectCodexAuthentication(codexHome) {
+    if (environmentHasValue("OPENAI_API_KEY")) {
+      return authenticationInfo(true, "environment", "");
+    }
+    var homes = [];
+    if (trim(codexHome).length) {
+      homes.push(new File(trim(codexHome)));
+    }
+    homes.push(new File(String(System.getProperty("user.home")), ".codex"));
+    var firstExpired = null;
+    var seenHomes = {};
+    for (var i = 0; i < homes.length; i++) {
+      var homePath = filePath(homes[i]);
+      if (seenHomes[homePath]) {
+        continue;
+      }
+      seenHomes[homePath] = true;
+      var scoped = i === 0 && trim(codexHome).length > 0;
+      var chatAuth = codexAuthFileState(new File(homes[i], "auth.json"));
+      if (chatAuth.exists) {
+        if (chatAuth.expired) {
+          var expired = authenticationInfo(false, "", "codex_login", "expired");
+          expired.expiresAt = chatAuth.expiresAt;
+          expired.hasRefreshToken = chatAuth.hasRefreshToken === true;
+          expired.home = homePath;
+          if (firstExpired === null) {
+            firstExpired = expired;
+          }
+          continue;
+        }
+        var chat = authenticationInfo(true, scoped ? "scoped_home" : "user_home", "");
+        chat.home = homePath;
+        chat.expiresAt = chatAuth.expiresAt;
+        chat.updatedAt = chatAuth.updatedAt;
+        return chat;
+      }
+      if (fileHasContent(new File(homes[i], "auth.json.api"))) {
+        var api = authenticationInfo(true, scoped ? "scoped_home" : "user_home", "");
+        api.home = homePath;
+        return api;
+      }
+    }
+    return firstExpired !== null ? firstExpired : authenticationInfo(false, "", "codex_login");
+  }
+
+  function codexDoctorAuthentication(options, codexHome, commandPath, forceCheck) {
+    var authentication = inspectCodexAuthentication(codexHome);
+    if ((authentication.status !== "expired" && forceCheck !== true) || !trim(commandPath).length) {
+      return authentication;
+    }
+    var probeHome = trim(authentication.home) || trim(codexHome);
+    var probe = runCommandCaptured([trim(commandPath), "doctor", "--json"], {
+      timeoutMs: intValue(options && options.codexAuthCheckTimeoutMs, 20000, 3000, 60000),
+      env: codexRuntimeEnv(options || {}, probeHome)
+    });
+    var output = String((probe.stdout || "") + "\n" + (probe.stderr || ""));
+    var lower = output.toLowerCase();
+    var refreshed = inspectCodexAuthentication(codexHome);
+    var authFailure = lower.indexOf("failed to refresh token") >= 0 ||
+      lower.indexOf("please log out and sign in again") >= 0 ||
+      lower.indexOf("authentication expired") >= 0 ||
+      lower.indexOf("invalid_grant") >= 0;
+    if (authFailure) {
+      authentication.checked = true;
+      authentication.checkMethod = "doctor";
+      authentication.status = "expired";
+      return authentication;
+    }
+    var report = parseJsonSafe(probe.stdout, null);
+    var checks = report && report.checks ? report.checks : {};
+    var credentials = checks["auth.credentials"] || {};
+    var providerReachability = checks["network.provider_reachability"] || {};
+    var credentialsOk = trim(credentials.status).toLowerCase() === "ok";
+    var providerOk = trim(providerReachability.status).toLowerCase() === "ok";
+    if (refreshed.configured === true && (forceCheck !== true || (credentialsOk && providerOk))) {
+      refreshed.checked = true;
+      refreshed.checkMethod = "doctor";
+      return refreshed;
+    }
+    var websocket = checks["network.websocket_reachability"] || {};
+    if (credentialsOk && (providerOk || trim(websocket.status).toLowerCase() === "ok")) {
+      authentication = authenticationInfo(true, "scoped_home", "");
+      authentication.checked = true;
+      authentication.checkMethod = "doctor";
+      return authentication;
+    }
+    authentication.checked = true;
+    authentication.checkMethod = "doctor";
+    authentication.configured = false;
+    authentication.method = "";
+    authentication.action = "codex_login";
+    authentication.status = probe.error === "timeout" ? "check_timeout" : (authentication.status === "expired" ? "expired" : "invalid");
+    return authentication;
+  }
+
+  function codexAppServerAuthenticationProbe(options, codexHome, commandPath) {
+    var startedAt = now();
+    var result = {
+      checked: true,
+      valid: false,
+      unauthorized: false,
+      error: "",
+      durationMs: 0
+    };
+    var process = null;
+    var writer = null;
+    var reader = null;
+    var errFile = null;
+    var transcript = "";
+    try {
+      errFile = File.createTempFile("c8o-codex-auth-probe-", ".log");
+      var pb = new ProcessBuilder(toJavaList([trim(commandPath), "app-server", "--listen", "stdio://"]));
+      applyEngineProxyEnvironment(pb.environment(), "https://chatgpt.com");
+      envObjectToMap(pb.environment(), codexRuntimeEnv(options || {}, codexHome));
+      pb.redirectError(errFile);
+      process = pb.start();
+      writer = new BufferedWriter(new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8));
+      reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+      var send = function (message) {
+        writer.write(JSON.stringify(message));
+        writer.newLine();
+        writer.flush();
+      };
+      send({ id: 1, method: "initialize", params: { clientInfo: { name: "ConvertigoAgentBridge", version: "0.1.0" }, capabilities: null } });
+      var initialized = false;
+      var deadline = now() + intValue(options && options.codexAuthCheckTimeoutMs, 20000, 3000, 60000);
+      while (now() < deadline && processAlive(process)) {
+        if (!reader.ready()) {
+          Thread.sleep(25);
+          continue;
+        }
+        var line = reader.readLine();
+        if (line === null) {
+          break;
+        }
+        transcript += line + "\n";
+        var message = parseJsonSafe(line, null);
+        if (message === null) {
+          continue;
+        }
+        if (!initialized && String(message.id) === "1") {
+          if (message.error) {
+            result.error = trim(message.error.message || JSON.stringify(message.error));
+            break;
+          }
+          initialized = true;
+          send({ method: "initialized" });
+          send({ id: 2, method: "account/rateLimits/read" });
+          continue;
+        }
+        if (initialized && String(message.id) === "2") {
+          if (message.error) {
+            result.error = trim(message.error.message || JSON.stringify(message.error));
+          } else {
+            result.valid = true;
+          }
+          break;
+        }
+      }
+      if (!result.valid && !result.error.length) {
+        result.error = now() >= deadline ? "timeout" : "Codex authentication probe ended without a response";
+      }
+    } catch (e) {
+      result.error = String(e);
+    } finally {
+      try { if (writer !== null) { writer.close(); } } catch (_ignoreAuthProbeWriterClose) {}
+      try { if (reader !== null) { reader.close(); } } catch (_ignoreAuthProbeReaderClose) {}
+      try { if (process !== null && processAlive(process)) { process.destroyForcibly(); } } catch (_ignoreAuthProbeDestroy) {}
+      try {
+        if (errFile !== null && errFile.isFile()) {
+          transcript += "\n" + readTextFile(errFile);
+        }
+      } catch (_ignoreAuthProbeStderr) {}
+      try { if (errFile !== null) { Files.deleteIfExists(errFile.toPath()); } } catch (_ignoreAuthProbeDelete) {}
+    }
+    var lower = String(transcript + "\n" + result.error).toLowerCase();
+    result.unauthorized = lower.indexOf("401 unauthorized") >= 0 ||
+      lower.indexOf("refresh token was revoked") >= 0 ||
+      lower.indexOf("failed to refresh token") >= 0 ||
+      lower.indexOf("invalid_grant") >= 0 ||
+      lower.indexOf("please log out and sign in again") >= 0;
+    result.durationMs = now() - startedAt;
+    return result;
+  }
+
+  function verifiedCodexAuthentication(options, codexHome, commandPath, forceCheck) {
+    var authentication = codexDoctorAuthentication(options, codexHome, commandPath, forceCheck);
+    if (authentication.configured !== true || !trim(commandPath).length) {
+      return authentication;
+    }
+    var authHome = trim(authentication.home) || trim(codexHome);
+    var cacheOptions = {};
+    options = options || {};
+    for (var key in options) {
+      if (Object.prototype.hasOwnProperty.call(options, key)) {
+        cacheOptions[key] = options[key];
+      }
+    }
+    cacheOptions.updateCheckCacheMs = intValue(options.codexAuthCheckCacheMs, DEFAULT_RUNTIME_UPDATE_CACHE_MS, 60000, 86400000);
+    cacheOptions.refreshUpdateCheck = forceCheck === true || boolValue(options.refreshCodexAuthCheck, false) || boolValue(options.refreshUpdateCheck, false);
+    var cacheKey = "codex-auth:" + hashShort(authHome + ":" + String(authentication.updatedAt || 0));
+    var probe = cachedRuntimeUpdate(cacheKey, cacheOptions, resolveWorkspaceRoot(options), function () {
+      return codexAppServerAuthenticationProbe(options, authHome, commandPath);
+    });
+    authentication.checked = true;
+    authentication.checkMethod = "app-server-rate-limits";
+    authentication.check = probe;
+    if (probe.unauthorized === true) {
+      authentication.configured = false;
+      authentication.status = "expired";
+      authentication.method = "";
+      authentication.action = "codex_login";
+    }
+    return authentication;
+  }
+
+  function vibeEnvHasApiKey(file) {
+    try {
+      var parsed = readEnvFile(file);
+      return trim(parsed.values.MISTRAL_API_KEY).length > 0;
+    } catch (_ignoreVibeEnv) {
+      return false;
+    }
+  }
+
+  function inspectVibeAuthentication(vibeHome) {
+    if (environmentHasValue("MISTRAL_API_KEY")) {
+      return authenticationInfo(true, "environment", "");
+    }
+    if (trim(vibeHome).length && vibeEnvHasApiKey(new File(trim(vibeHome), ".env"))) {
+      return authenticationInfo(true, "scoped_home", "");
+    }
+    var userEnv = new File(new File(String(System.getProperty("user.home")), ".vibe"), ".env");
+    if (vibeEnvHasApiKey(userEnv)) {
+      return authenticationInfo(true, "user_home", "");
+    }
+    return authenticationInfo(false, "", "mistral_api_key");
   }
 
   function projectWorkspaceRoot(projectName) {
@@ -2909,7 +3505,10 @@
     if (value.providers === null || typeof value.providers !== "object") {
       value.providers = {};
     }
-    value.version = 2;
+    if (value.preferences === null || typeof value.preferences !== "object") {
+      value.preferences = {};
+    }
+    value.version = 4;
     return {
       file: file,
       value: value
@@ -2928,6 +3527,101 @@
     return models.length ? trim(models[0] && models[0].defaultReasoning) : "";
   }
 
+  function agentPreferenceKey(options) {
+    options = options || {};
+    var user = trim(options.userId) || contextUserId() || "studio";
+    var profile = normalizeSkillProfile(options) || "generalist";
+    return userPathSlug(user) + ":" + userPathSlug(profile);
+  }
+
+  function readPersistentAgentPreferences(workspaceRoot, options) {
+    try {
+      var persistent = readPersistentRuntimeUpdateCache(workspaceRoot);
+      return persistent.value.preferences[agentPreferenceKey(options)] || null;
+    } catch (_ignorePersistentAgentPreferencesRead) {}
+    return null;
+  }
+
+  function writePersistentAgentPreferences(workspaceRoot, options, preferences) {
+    var persistent = readPersistentRuntimeUpdateCache(workspaceRoot);
+    if (persistent.file === null) {
+      return;
+    }
+    var lock = null;
+    try {
+      lock = acquireFileLock(new File(persistent.file.getParentFile(), RUNTIME_UPDATE_CACHE_FILE + ".lock"), 5000);
+      persistent = readPersistentRuntimeUpdateCache(workspaceRoot);
+      persistent.value.preferences[agentPreferenceKey(options)] = preferences;
+      writeTextFile(persistent.file, JSON.stringify(persistent.value, null, 2) + "\n");
+    } catch (_ignorePersistentAgentPreferencesWrite) {
+    } finally {
+      if (lock !== null) {
+        lock.release();
+      }
+    }
+  }
+
+  function validatedAgentPreferences(preferences, providers) {
+    preferences = preferences || {};
+    providers = providers || [];
+    var providerId = normalizeProvider(preferences.provider);
+    var provider = null;
+    for (var i = 0; i < providers.length; i++) {
+      if (normalizeProvider(providers[i] && providers[i].id) === providerId && providers[i].ready === true) {
+        provider = providers[i];
+        break;
+      }
+    }
+    if (provider === null) {
+      return null;
+    }
+    var models = provider.models || [];
+    var modelId = trim(preferences.model);
+    var model = null;
+    for (var j = 0; j < models.length; j++) {
+      if (trim(models[j] && models[j].id) === modelId) {
+        model = models[j];
+        break;
+      }
+    }
+    if (model === null) {
+      modelId = trim(provider.defaultModel);
+      for (var k = 0; k < models.length; k++) {
+        if (trim(models[k] && models[k].id) === modelId) {
+          model = models[k];
+          break;
+        }
+      }
+    }
+    if (model === null && models.length) {
+      model = models[0];
+      modelId = trim(model.id);
+    }
+    var reasoning = trim(preferences.reasoning);
+    var reasoningLevels = model && model.reasoningLevels ? model.reasoningLevels : [];
+    var reasoningValid = !reasoning.length;
+    for (var r = 0; r < reasoningLevels.length; r++) {
+      if (trim(reasoningLevels[r] && reasoningLevels[r].id) === reasoning) {
+        reasoningValid = true;
+        break;
+      }
+    }
+    if (!reasoningValid) {
+      reasoning = trim(model && model.defaultReasoning);
+    }
+    if (!(provider.supports && provider.supports.reasoning === true)) {
+      reasoning = "";
+    }
+    return {
+      confirmed: preferences.confirmed === true,
+      provider: providerId,
+      model: modelId,
+      reasoning: reasoning,
+      serviceTier: trim(preferences.serviceTier),
+      updatedAt: Number(preferences.updatedAt || 0)
+    };
+  }
+
   function compactProviderSettingsCache(provider) {
     provider = provider || {};
     return {
@@ -2942,10 +3636,25 @@
     };
   }
 
-  function readPersistentProviderSettingsCache(workspaceRoot, providerId) {
+  function providerSettingsCacheKey(providerId, profilePath) {
+    var provider = normalizeProvider(providerId);
+    var profile = trim(profilePath);
+    return provider === "vibe" && profile.length ? provider + ":" + hashShort(canonicalFilePath(new File(profile))) : provider;
+  }
+
+  function providerCacheKey(provider) {
+    provider = provider || {};
+    return trim(provider.settingsCacheKey) || normalizeProvider(provider.id);
+  }
+
+  function readPersistentProviderSettingsCache(workspaceRoot, providerId, cacheKey) {
     try {
       var persistent = readPersistentRuntimeUpdateCache(workspaceRoot);
-      var cached = persistent.value.providers[normalizeProvider(providerId)];
+      var key = trim(cacheKey) || normalizeProvider(providerId);
+      var cached = persistent.value.providers[key];
+      if ((!cached || !cached.models || !cached.models.length) && key !== normalizeProvider(providerId) && normalizeProvider(providerId) !== "vibe") {
+        cached = persistent.value.providers[normalizeProvider(providerId)];
+      }
       if (cached && cached.models && cached.models.length) {
         return cached;
       }
@@ -2965,9 +3674,12 @@
       providers = providers || [];
       for (var i = 0; i < providers.length; i++) {
         var provider = providers[i] || {};
-        var providerId = normalizeProvider(provider.id);
-        if (providerId.length && provider.models && provider.models.length) {
-          persistent.value.providers[providerId] = compactProviderSettingsCache(provider);
+        var cacheKey = providerCacheKey(provider);
+        if (cacheKey.length && provider.models && provider.models.length) {
+          persistent.value.providers[cacheKey] = compactProviderSettingsCache(provider);
+          if (cacheKey.indexOf("vibe:") === 0) {
+            delete persistent.value.providers.vibe;
+          }
         }
       }
       writeTextFile(persistent.file, JSON.stringify(persistent.value, null, 2) + "\n");
@@ -2979,12 +3691,12 @@
     }
   }
 
-  function hydrateProviderSettingsFromCache(workspaceRoot, provider) {
+  function hydrateProviderSettingsFromCache(workspaceRoot, provider, preferCached) {
     provider = provider || {};
-    if (provider.models && provider.models.length) {
+    if (!preferCached && provider.models && provider.models.length) {
       return provider;
     }
-    var cached = readPersistentProviderSettingsCache(workspaceRoot, provider.id);
+    var cached = readPersistentProviderSettingsCache(workspaceRoot, provider.id, providerCacheKey(provider));
     if (cached === null) {
       return provider;
     }
@@ -2996,6 +3708,46 @@
     provider.source.settingsCached = true;
     provider.source.settingsCachedAt = Number(cached.cachedAt || 0);
     return provider;
+  }
+
+  function requireCachedProviderConfiguration(provider) {
+    provider = provider || {};
+    if (provider.ready !== true) {
+      return provider;
+    }
+    var models = provider.models || [];
+    var defaultModel = trim(provider.defaultModel);
+    var defaultModelFound = false;
+    for (var i = 0; i < models.length; i++) {
+      if (trim(models[i] && models[i].id) === defaultModel) {
+        defaultModelFound = true;
+        break;
+      }
+    }
+    if (!models.length || !defaultModel.length || !defaultModelFound) {
+      provider.ready = false;
+      provider.status = "configuration_required";
+      provider.source = provider.source || {};
+      provider.source.error = "Provider model catalog is not cached";
+    }
+    return provider;
+  }
+
+  function requireProviderAuthentication(provider) {
+    provider = provider || {};
+    var authentication = provider.authentication || authenticationInfo(false, "", "authenticate");
+    if (provider.runtime && provider.runtime.installed === true && authentication.configured !== true) {
+      provider.ready = false;
+      provider.status = "authentication_required";
+      provider.source = provider.source || {};
+      provider.source.error = "Provider authentication is required";
+    }
+    return provider;
+  }
+
+  function providerSettingsCacheFresh(provider, maxAgeMs) {
+    var cachedAt = Number(provider && provider.source && provider.source.settingsCachedAt || 0);
+    return cachedAt > 0 && now() - cachedAt < maxAgeMs;
   }
 
   function writePersistentRuntimeUpdateCache(workspaceRoot, cacheKey, loaded, nextCheckAt) {
@@ -3125,6 +3877,7 @@
     };
     try {
       var pb = new ProcessBuilder(toJavaList(args));
+      applyEngineProxyEnvironment(pb.environment(), options && options.proxyTargetUrl);
       if (options && options.cwd) {
         pb.directory(new File(String(options.cwd)));
       }
@@ -3172,6 +3925,7 @@
       outFile = File.createTempFile("c8o-agent-bridge-out-", ".log");
       errFile = File.createTempFile("c8o-agent-bridge-err-", ".log");
       var pb = new ProcessBuilder(toJavaList(args));
+      applyEngineProxyEnvironment(pb.environment(), options && options.proxyTargetUrl);
       if (options && options.cwd) {
         pb.directory(new File(String(options.cwd)));
       }
@@ -3205,6 +3959,40 @@
     return result;
   }
 
+  function compactCommandResult(result, maxChars) {
+    result = result || {};
+    var limit = intValue(maxChars, 4000, 256, 16000);
+    var compactText = function (value) {
+      var text = String(value || "");
+      if (text.length <= limit) {
+        return text;
+      }
+      return "... " + text.substring(text.length - limit);
+    };
+    return {
+      command: String(result.command || ""),
+      exitCode: typeof result.exitCode === "number" ? result.exitCode : -1,
+      stdout: compactText(result.stdout),
+      stderr: compactText(result.stderr),
+      durationMs: Number(result.durationMs || 0),
+      ok: result.ok === true,
+      error: String(result.error || "")
+    };
+  }
+
+  function requireSuccessfulCommand(result, label) {
+    if (result && result.ok === true) {
+      return result;
+    }
+    result = result || {};
+    var detail = trim(result.stderr) || trim(result.error) || trim(result.stdout) || "unknown error";
+    if (detail.length > 2000) {
+      detail = "... " + detail.substring(detail.length - 2000);
+    }
+    var exitCode = typeof result.exitCode === "number" ? " (exit " + result.exitCode + ")" : "";
+    throw new Error(String(label || "Command") + " failed" + exitCode + ": " + detail);
+  }
+
   function parseJsonSafe(text, fallback) {
     try {
       return JSON.parse(String(text || ""));
@@ -3225,6 +4013,7 @@
       error: ""
     };
     try {
+      applyEngineProxyEnvironment(pb.environment(), options && options.proxyTargetUrl);
       if (options && options.cwd) {
         pb.directory(new File(String(options.cwd)));
       }
@@ -3271,32 +4060,106 @@
     return total;
   }
 
+  function exceptionChain(error) {
+    var messages = [];
+    var current = error;
+    try {
+      if (error && error.javaException) {
+        current = error.javaException;
+      } else if (error && error.getWrappedException) {
+        current = error.getWrappedException();
+      }
+    } catch (_ignoreWrappedException) {}
+    for (var i = 0; current !== null && typeof current !== "undefined" && i < 8; i++) {
+      var message = trim(String(current));
+      if (message.length && messages.indexOf(message) === -1) {
+        messages.push(message);
+      }
+      try {
+        current = current.getCause ? current.getCause() : null;
+      } catch (_ignoreExceptionCause) {
+        current = null;
+      }
+    }
+    return messages.join(" caused by ") || String(error);
+  }
+
+  function resolveRedirectUrl(baseUrl, location) {
+    return String(new Packages.java.net.URI(String(baseUrl)).resolve(String(location)).toString());
+  }
+
+  function redirectLocationValue(header) {
+    if (header === null || typeof header === "undefined") {
+      return "";
+    }
+    if (typeof header.getValue === "function") {
+      return String(header.getValue());
+    }
+    return String(header).replace(/^Location\s*:\s*/i, "");
+  }
+
+  function validateAbsoluteHttpUrl(url) {
+    var uri = new Packages.java.net.URI(String(url));
+    var scheme = trim(uri.getScheme()).toLowerCase();
+    var host = trim(uri.getHost());
+    if ((scheme !== "http" && scheme !== "https") || !host.length) {
+      throw new Error("Invalid absolute HTTP URL: " + url);
+    }
+    return uri;
+  }
+
   function downloadFile(url, file) {
     var startedAt = now();
     var result = {
       url: String(url),
+      finalUrl: String(url),
       path: filePath(file),
       bytes: 0,
       durationMs: 0,
       ok: false,
       statusCode: 0,
+      redirects: 0,
       error: ""
     };
     try {
-      var get = new Packages.org.apache.http.client.methods.HttpGet(String(url));
-      var response = Packages.com.twinsoft.convertigo.engine.Engine.theApp.httpClient4.execute(get);
-      try {
-        result.statusCode = response.getStatusLine().getStatusCode();
-        if (result.statusCode < 200 || result.statusCode >= 300) {
-          throw new Error("HTTP " + result.statusCode + " while downloading " + url);
+      var currentUrl = String(url);
+      var maxRedirects = 8;
+      while (true) {
+        var get = new Packages.org.apache.http.client.methods.HttpGet(currentUrl);
+        get.setHeader("User-Agent", "ConvertigoAgentBridge");
+        get.setHeader("Accept", "application/octet-stream");
+        var requestConfig = Packages.org.apache.http.client.config.RequestConfig.custom().setRedirectsEnabled(false);
+        configureHttpRequestProxy(get, requestConfig, currentUrl);
+        get.setConfig(requestConfig.build());
+        validateAbsoluteHttpUrl(currentUrl);
+        var response = Packages.com.twinsoft.convertigo.engine.Engine.theApp.httpClient4.execute(get);
+        try {
+          result.statusCode = response.getStatusLine().getStatusCode();
+          result.finalUrl = currentUrl;
+          if (result.statusCode >= 300 && result.statusCode < 400) {
+            var location = response.getFirstHeader("Location");
+            if (location === null) {
+              throw new Error("HTTP " + result.statusCode + " without Location while downloading " + currentUrl);
+            }
+            result.redirects++;
+            if (result.redirects > maxRedirects) {
+              throw new Error("Too many redirects while downloading " + url);
+            }
+            currentUrl = resolveRedirectUrl(currentUrl, redirectLocationValue(location));
+            continue;
+          }
+          if (result.statusCode < 200 || result.statusCode >= 300) {
+            throw new Error("HTTP " + result.statusCode + " while downloading " + currentUrl);
+          }
+          result.bytes = copyStreamToFile(response.getEntity().getContent(), file);
+          result.ok = true;
+          break;
+        } finally {
+          try { response.close(); } catch (_ignoreResponseClose) {}
         }
-        result.bytes = copyStreamToFile(response.getEntity().getContent(), file);
-        result.ok = true;
-      } finally {
-        try { response.close(); } catch (_ignoreResponseClose) {}
       }
     } catch (e) {
-      result.error = String(e);
+      result.error = exceptionChain(e);
     }
     result.durationMs = now() - startedAt;
     return result;
@@ -3393,7 +4256,13 @@
     var asset = "cpython-" + version + "+" + buildTag + "-" + platform + "-" + flavor + ".tar.gz";
     var archiveUrl = trim(options.pythonArchiveUrl);
     if (!archiveUrl.length) {
-      var prefix = trim(options.pythonAssetUrlPrefix || options.pythonMirrorBaseUrl || DEFAULT_PYTHON_ASSET_PREFIX);
+      // Convertigo request variables are Java String objects in Rhino. An empty
+      // Java string is truthy, so normalize candidates before choosing one.
+      var prefix = firstNonBlank([
+        options.pythonAssetUrlPrefix,
+        options.pythonMirrorBaseUrl,
+        DEFAULT_PYTHON_ASSET_PREFIX
+      ]);
       prefix = prefix.replace(/\{tag\}/g, buildTag);
       archiveUrl = prefix.replace(/\/+$/g, "") + "/" + asset.replace(/\+/g, "%2B");
     }
@@ -3455,7 +4324,10 @@
     var runtime = detected.runtime;
     var forceOption = typeof options.force !== "undefined" ? options.force : options.forcePythonInstall;
     var force = boolValue(forceOption, false);
-    if (detected.command.found && !force) {
+    var workspaceFirstOption = typeof options.workspaceInstallFirst !== "undefined" ? options.workspaceInstallFirst : options.preferWorkspaceInstall;
+    var workspaceFirst = boolValue(typeof workspaceFirstOption === "undefined" ? true : workspaceFirstOption, true);
+    var managedPythonReady = detected.command.found && commandPathStartsWith(detected.command, runtime.installDir);
+    if (detected.command.found && !force && (!workspaceFirst || managedPythonReady)) {
       return {
         attempted: false,
         installed: false,
@@ -3469,14 +4341,15 @@
     var allowDownloadOption = typeof options.allowDownload !== "undefined" ? options.allowDownload : options.allowPythonDownload;
     var allowDownload = boolValue(allowDownloadOption, true);
     if (!allowDownload) {
-      throw new Error("Python is missing and downloads are disabled");
+      throw new Error(workspaceFirst ? "Managed Python is missing and downloads are disabled" : "Python is missing and downloads are disabled");
     }
 
     var lock = acquireFileLock(new File(runtime.lockFile), intValue(options.pythonInstallLockTimeoutMs, 600000, 10000, 3600000));
     var steps = [];
     try {
       detected = detectPythonRuntime(options, "");
-      if (detected.command.found && !force) {
+      managedPythonReady = detected.command.found && commandPathStartsWith(detected.command, runtime.installDir);
+      if (detected.command.found && !force && (!workspaceFirst || managedPythonReady)) {
         return {
           attempted: true,
           installed: false,
@@ -3508,8 +4381,8 @@
         throw new Error("Unable to extract Python archive: " + (steps[steps.length - 1].result.stderr || steps[steps.length - 1].result.error));
       }
       try { Files.deleteIfExists(archiveFile.toPath()); } catch (_ignoreArchiveDelete) {}
-      detected = detectPythonRuntime(options, "");
-      if (!detected.command.found) {
+      var managedPython = firstWorkingCommand(pythonBinaryCandidates(runtime.installDir), ["--version"]);
+      if (!managedPython.found) {
         throw new Error("Python archive was extracted but no runnable python executable was found");
       }
       return {
@@ -3517,7 +4390,7 @@
         installed: true,
         reused: false,
         runtime: runtime,
-        python: detected.command,
+        python: managedPython,
         steps: steps,
         timestamp: now()
       };
@@ -3826,6 +4699,7 @@
     return runProcessBuilder(pb, {
       cwd: options && options.cwd ? options.cwd : null,
       env: options && options.env ? options.env : null,
+      proxyTargetUrl: "https://registry.npmjs.org",
       timeoutMs: options && options.timeoutMs ? options.timeoutMs : 15000
     });
   }
@@ -4122,6 +4996,43 @@
     }
   }
 
+  function pythonDistInfoVersion(directoryName, packageName) {
+    var normalizedDirectory = trim(directoryName).toLowerCase().replace(/-/g, "_");
+    var normalizedPackage = trim(packageName).toLowerCase().replace(/-/g, "_");
+    var prefix = normalizedPackage + "_";
+    var suffix = ".dist_info";
+    if (normalizedDirectory.indexOf(prefix) !== 0 || normalizedDirectory.slice(-suffix.length) !== suffix) {
+      return "";
+    }
+    return extractRuntimeVersion(normalizedDirectory.substring(prefix.length, normalizedDirectory.length - suffix.length));
+  }
+
+  function installedPythonPackageVersion(venvDir, packageName) {
+    try {
+      var roots = [new File(childPath(childPath(venvDir, "Lib"), "site-packages"))];
+      var libDir = new File(childPath(venvDir, "lib"));
+      var pythonDirs = libDir.isDirectory() ? libDir.listFiles() : null;
+      for (var i = 0; pythonDirs !== null && i < pythonDirs.length; i++) {
+        if (pythonDirs[i].isDirectory() && String(pythonDirs[i].getName()).indexOf("python") === 0) {
+          roots.push(new File(pythonDirs[i], "site-packages"));
+        }
+      }
+      for (var rootIndex = 0; rootIndex < roots.length; rootIndex++) {
+        var entries = roots[rootIndex].isDirectory() ? roots[rootIndex].listFiles() : null;
+        for (var entryIndex = 0; entries !== null && entryIndex < entries.length; entryIndex++) {
+          if (!entries[entryIndex].isDirectory()) {
+            continue;
+          }
+          var version = pythonDistInfoVersion(entries[entryIndex].getName(), packageName);
+          if (version.length) {
+            return version;
+          }
+        }
+      }
+    } catch (_ignoreInstalledPythonPackageVersion) {}
+    return "";
+  }
+
   function inspectVibeConfig(file) {
     var info = {
       path: filePath(file),
@@ -4199,6 +5110,77 @@
     };
   }
 
+  function managedVibeModelPresets() {
+    return [{
+      name: "zai-glm-5-2",
+      provider: "mistral",
+      alias: "zai-glm-5-2",
+      inputPrice: "1.4",
+      outputPrice: "4.4",
+      thinking: "high"
+    }];
+  }
+
+  function vibeConfigHasModel(text, preset) {
+    var blockPattern = /\[\[models\]\]([\s\S]*?)(?=\n\[\[|\n\[|$)/g;
+    var blockMatch;
+    while ((blockMatch = blockPattern.exec(String(text || ""))) !== null) {
+      var block = blockMatch[1];
+      if (parseTomlValue(block, "name") === preset.name || parseTomlValue(block, "alias") === preset.alias) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function appendManagedVibeModelPresets(text) {
+    var result = String(text || "");
+    var presets = managedVibeModelPresets();
+    var added = [];
+    for (var i = 0; i < presets.length; i++) {
+      var preset = presets[i];
+      if (vibeConfigHasModel(result, preset)) {
+        continue;
+      }
+      var block = [
+        "[[models]]",
+        'name = "' + tomlString(preset.name) + '"',
+        'provider = "' + tomlString(preset.provider) + '"',
+        'alias = "' + tomlString(preset.alias) + '"',
+        "input_price = " + preset.inputPrice,
+        "output_price = " + preset.outputPrice,
+        'thinking = "' + tomlString(preset.thinking) + '"',
+        ""
+      ].join("\n");
+      var mcpIndex = result.indexOf("\n[[mcp_servers]]");
+      if (mcpIndex >= 0) {
+        result = result.substring(0, mcpIndex + 1) + block + "\n" + result.substring(mcpIndex + 1);
+      } else {
+        result = result.replace(/\s*$/, "\n\n") + block;
+      }
+      added.push(preset.alias);
+    }
+    return {
+      text: result,
+      added: added
+    };
+  }
+
+  function ensureManagedVibeModelPresets(vibeHome) {
+    var configFile = new File(vibeHome, "config.toml");
+    if (!configFile.isFile()) {
+      return { path: filePath(configFile), added: [] };
+    }
+    var patched = appendManagedVibeModelPresets(readTextFile(configFile));
+    if (patched.added.length) {
+      writeTextFile(configFile, patched.text);
+    }
+    return {
+      path: filePath(configFile),
+      added: patched.added
+    };
+  }
+
   function writeLocalVibeConfig(vibeHome, mcpEndpoint, model) {
     var configDir = new File(vibeHome);
     ensureDirectory(configDir);
@@ -4237,10 +5219,11 @@
       '[[mcp_servers]]',
       'name = "Convertigo"',
       'transport = "http"',
-      'url = "' + tomlString(mcpEndpoint) + '"',
+      'url = "' + tomlString(managedMcpTransportEndpoint(mcpEndpoint)) + '"',
       'startup_timeout_sec = 60.0',
       ''
     ].join("\n");
+    text = appendManagedVibeModelPresets(text).text;
     return {
       path: filePath(configFile),
       model: spec.activeModel,
@@ -4451,6 +5434,21 @@
     var vibeHome = vibeHomeInfo.path;
     var userHome = String(System.getProperty("user.home"));
     var homeLocalBin = childPath(userHome, ".local/bin");
+    var vibe = firstExistingCommand([
+      venvBinPath(venvDir, "vibe"),
+      childPath(homeLocalBin, "vibe"),
+      "vibe"
+    ], "");
+    var vibeAcp = firstExistingCommand([
+      venvBinPath(venvDir, "vibe-acp"),
+      childPath(homeLocalBin, "vibe-acp"),
+      "vibe-acp"
+    ], "");
+    if (commandPathStartsWith(vibe, venvDir) && commandPathStartsWith(vibeAcp, venvDir)) {
+      var installedVersion = installedPythonPackageVersion(venvDir, "mistral-vibe");
+      vibe.version = installedVersion.length ? "vibe " + installedVersion : "";
+      vibeAcp.version = installedVersion.length ? "vibe-acp " + installedVersion : "";
+    }
     return {
       workspaceRoot: workspaceRoot,
       installDir: installDir,
@@ -4472,16 +5470,8 @@
         childPath(homeLocalBin, "uv"),
         "uv"
       ], ""),
-      vibe: firstExistingCommand([
-        venvBinPath(venvDir, "vibe"),
-        childPath(homeLocalBin, "vibe"),
-        "vibe"
-      ], ""),
-      vibeAcp: firstExistingCommand([
-        venvBinPath(venvDir, "vibe-acp"),
-        childPath(homeLocalBin, "vibe-acp"),
-        "vibe-acp"
-      ], ""),
+      vibe: vibe,
+      vibeAcp: vibeAcp,
       config: {
         selected: vibeHome.length ? inspectVibeConfig(new File(vibeHome, "config.toml")) : {
           path: "",
@@ -4828,6 +5818,7 @@
         };
       }
       var probe = runCommandCaptured([setup.python.path, "-m", "pip", "index", "versions", "mistral-vibe"], {
+        proxyTargetUrl: "https://pypi.org",
         timeoutMs: intValue(options.updateCheckTimeoutMs, 20000, 1000, 120000)
       });
       var text = String((probe.stdout || "") + "\n" + (probe.stderr || ""));
@@ -4888,6 +5879,7 @@
       status: setup.codex.found ? "ready" : "missing",
       ready: setup.codex.found === true,
       runtime: runtime,
+      authentication: verifiedCodexAuthentication(options, setup.codexHome, setup.codex.path, !presenceOnly && bootstrap && bootstrap.authenticationImported === true),
       setup: compactCodexSetup(setup),
       bootstrap: bootstrap,
       skills: skills,
@@ -4956,12 +5948,177 @@
     return result;
   }
 
+  function acpConfigOptions(value) {
+    value = value || {};
+    var options = value.configOptions || value.config_options || value;
+    return options && typeof options.length !== "undefined" ? options : [];
+  }
+
+  function findAcpConfigOption(configOptions, id) {
+    var wanted = trim(id).toLowerCase();
+    var options = acpConfigOptions(configOptions);
+    for (var i = 0; i < options.length; i++) {
+      var option = options[i] || {};
+      if (trim(option.id || option.configId || option.config_id || option.category).toLowerCase() === wanted) {
+        return option;
+      }
+    }
+    return null;
+  }
+
+  function normalizeAcpSelectOptions(option) {
+    var result = [];
+    var seen = {};
+    var options = option && option.options ? option.options : [];
+    for (var i = 0; i < options.length; i++) {
+      var item = options[i] || {};
+      var id = trim(item.value || item.id || item.name);
+      if (!id.length || seen[id]) {
+        continue;
+      }
+      seen[id] = true;
+      result.push({
+        id: id,
+        label: String(item.name || item.label || id),
+        description: String(item.description || "")
+      });
+    }
+    return result;
+  }
+
+  function normalizeVibeAcpProviderSettings(configOptions, provider) {
+    provider = provider || {};
+    var modelOption = findAcpConfigOption(configOptions, "model");
+    var thinkingOption = findAcpConfigOption(configOptions, "thinking");
+    var modelChoices = normalizeAcpSelectOptions(modelOption);
+    if (!modelChoices.length) {
+      return provider;
+    }
+    var reasoningLevels = normalizeAcpSelectOptions(thinkingOption);
+    var defaultReasoning = trim(thinkingOption && (thinkingOption.currentValue || thinkingOption.current_value));
+    var models = [];
+    for (var i = 0; i < modelChoices.length; i++) {
+      var model = modelChoices[i];
+      models.push({
+        id: model.id,
+        label: model.label,
+        description: model.description,
+        configuredName: model.description,
+        provider: "mistral",
+        defaultReasoning: defaultReasoning,
+        reasoningLevels: reasoningLevels,
+        serviceTiers: [],
+        speedTiers: []
+      });
+    }
+    provider.id = "vibe";
+    provider.label = provider.label || "Vibe";
+    provider.defaultModel = trim(modelOption.currentValue || modelOption.current_value) || models[0].id;
+    provider.models = models;
+    provider.reasoningMode = reasoningLevels.length ? "runtime_selectable" : "model_bound";
+    provider.supports = provider.supports || {};
+    provider.supports.reasoning = reasoningLevels.length > 0;
+    provider.source = provider.source || {};
+    provider.source.type = "acp";
+    provider.source.ok = true;
+    provider.source.error = "";
+    provider.source.settingsCached = false;
+    provider.source.settingsCachedAt = 0;
+    return provider;
+  }
+
+  function updateVibeProviderSettings(entry, configOptions, provider) {
+    if (!entry || normalizeProvider(entry.provider) !== "vibe") {
+      return provider || null;
+    }
+    var base = provider || entry.providerSettings || {
+      id: "vibe",
+      label: "Vibe",
+      ready: true,
+      status: "ready",
+      source: {},
+      supports: {
+        resume: true,
+        stop: true,
+        images: false,
+        mcp: true,
+        reasoning: false,
+        serviceTier: false
+      }
+    };
+    base.settingsCacheKey = providerSettingsCacheKey("vibe", entry.home && entry.home.path);
+    var settings = normalizeVibeAcpProviderSettings(configOptions, base);
+    if (!settings.models || !settings.models.length) {
+      return settings;
+    }
+    entry.configOptions = acpConfigOptions(configOptions);
+    entry.providerSettings = settings;
+    entry.model = settings.defaultModel || entry.model || "";
+    entry.reasoningEffort = providerDefaultReasoning(settings) || entry.reasoningEffort || "";
+    writePersistentProviderSettingsCache(entry.workspaceRoot || "", [settings]);
+    return settings;
+  }
+
+  function acpConfigOptionHasValue(option, value) {
+    var wanted = trim(value);
+    if (!option || !wanted.length) {
+      return false;
+    }
+    var choices = normalizeAcpSelectOptions(option);
+    for (var i = 0; i < choices.length; i++) {
+      if (choices[i].id === wanted) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function configureVibeSession(entry, options, timeoutMs) {
+    options = options || {};
+    var requestedModel = trim(options.model || options.agentModel);
+    var requestedReasoning = trim(options.reasoningEffort || options.reasoningLevel || options.modelReasoningEffort);
+    var configOptions = entry.configOptions || acpConfigOptions(entry.session);
+    var modelOption = findAcpConfigOption(configOptions, "model");
+    if (requestedModel.length && acpConfigOptionHasValue(modelOption, requestedModel) && requestedModel !== trim(modelOption.currentValue || modelOption.current_value)) {
+      var modelResult = acpRequest(entry, "session/set_config_option", {
+        sessionId: entry.sessionId,
+        configId: "model",
+        value: requestedModel
+      }, timeoutMs);
+      configOptions = acpConfigOptions(modelResult);
+      updateVibeProviderSettings(entry, configOptions);
+    } else if (requestedModel.length && !acpConfigOptionHasValue(modelOption, requestedModel)) {
+      pushEvent(entry, "warning", {
+        phase: "session/config",
+        message: "Requested Vibe model is not available for this profile: " + requestedModel
+      });
+    }
+    var thinkingOption = findAcpConfigOption(configOptions, "thinking");
+    if (requestedReasoning.length && acpConfigOptionHasValue(thinkingOption, requestedReasoning) && requestedReasoning !== trim(thinkingOption.currentValue || thinkingOption.current_value)) {
+      var reasoningResult = acpRequest(entry, "session/set_config_option", {
+        sessionId: entry.sessionId,
+        configId: "thinking",
+        value: requestedReasoning
+      }, timeoutMs);
+      configOptions = acpConfigOptions(reasoningResult);
+      updateVibeProviderSettings(entry, configOptions);
+    } else if (requestedReasoning.length && !acpConfigOptionHasValue(thinkingOption, requestedReasoning)) {
+      pushEvent(entry, "warning", {
+        phase: "session/config",
+        message: "Requested Vibe thinking level is not available for this profile: " + requestedReasoning
+      });
+    }
+    return updateVibeProviderSettings(entry, configOptions);
+  }
+
   function vibeSettings(options) {
     options = optionsWithRequestFallbacks(options);
     var capabilityProfile = publicAgentCapabilityProfile(options);
     var profileSupported = capabilityProfile.supportedProviders.indexOf("vibe") >= 0;
     var setup = boolValue(options.runtimePresenceOnly, false) ? detectRuntimePresence(options) : detectRuntime(options);
-    var runtime = runtimeUpdateStatus("vibe", setup.vibe, vibeLatestVersion(options, setup), "pypi");
+    var managedVibeReady = commandPathStartsWith(setup.vibe, setup.venvDir) && commandPathStartsWith(setup.vibeAcp, setup.venvDir);
+    var runtimeCommand = managedVibeReady ? setup.vibe : { found: false, path: "", version: "" };
+    var runtime = runtimeUpdateStatus("vibe", runtimeCommand, vibeLatestVersion(options, setup), "pypi");
     var selectedFile = setup.vibeHome.length ? new File(setup.vibeHome, "config.toml") : null;
     var selected = selectedFile !== null ? parseVibeModelsFromConfig(selectedFile) : { path: "", exists: false, activeModel: "", models: [] };
     var user = parseVibeModelsFromConfig(new File(new File(String(System.getProperty("user.home")), ".vibe"), "config.toml"));
@@ -4985,12 +6142,13 @@
       }];
     }
     var defaultModel = config.activeModel || setup.model || (models.length ? models[0].id : "");
-    return {
+    var provider = {
       id: "vibe",
       label: "Vibe",
-      status: profileSupported ? (setup.vibe.found && setup.vibeAcp.found ? "ready" : "missing") : "unsupported_profile",
-      ready: profileSupported && setup.vibe.found === true && setup.vibeAcp.found === true,
+      status: profileSupported ? (managedVibeReady ? "ready" : "missing") : "unsupported_profile",
+      ready: profileSupported && managedVibeReady,
       runtime: runtime,
+      authentication: inspectVibeAuthentication(setup.vibeHome),
       setup: compactVibeSetup(setup),
       source: {
         type: config.exists ? "config" : "fallback",
@@ -5012,6 +6170,17 @@
       },
       agentProfile: capabilityProfile
     };
+    provider.settingsCacheKey = providerSettingsCacheKey("vibe", setup.vibeHome);
+    provider = hydrateProviderSettingsFromCache(setup.workspaceRoot, provider, true);
+    if (!boolValue(options.runtimePresenceOnly, false) && managedVibeReady && commandPathStartsWith({ path: setup.vibeHome }, setup.installDir)) {
+      var presetUpdate = ensureManagedVibeModelPresets(setup.vibeHome);
+      if (presetUpdate.added.length) {
+        provider.source = provider.source || {};
+        provider.source.settingsCachedAt = 0;
+        provider.source.modelPresetsAdded = presetUpdate.added;
+      }
+    }
+    return provider;
   }
 
   function canonicalFilePath(file) {
@@ -5452,14 +6621,40 @@
         }
       }
     }
-    if (presenceOnly) {
-      for (var cachedProviderIndex = 0; cachedProviderIndex < providers.length; cachedProviderIndex++) {
-        providers[cachedProviderIndex] = hydrateProviderSettingsFromCache(settingsWorkspaceRoot, providers[cachedProviderIndex]);
+    var settingsCacheMaxAgeMs = intValue(options.settingsCacheMaxAgeMs || options.updateCheckCacheMs, DEFAULT_RUNTIME_UPDATE_CACHE_MS, 60000, 604800000);
+    for (var cachedProviderIndex = 0; cachedProviderIndex < providers.length; cachedProviderIndex++) {
+      var currentProvider = providers[cachedProviderIndex];
+      currentProvider = hydrateProviderSettingsFromCache(settingsWorkspaceRoot, currentProvider, normalizeProvider(currentProvider.id) === "vibe");
+      if (presenceOnly) {
+        currentProvider = requireCachedProviderConfiguration(currentProvider);
       }
-    } else {
+      currentProvider = requireProviderAuthentication(currentProvider);
+      if (!presenceOnly && normalizeProvider(currentProvider.id) === "vibe" && currentProvider.ready === true && typeof C8O.agentBridge.discoverVibeSettings === "function") {
+        var refreshProviderSettings = boolValue(options.refreshProviderSettings || options.refreshModelCatalog || options.refreshUpdateCheck, false);
+        if (refreshProviderSettings || !providerSettingsCacheFresh(currentProvider, settingsCacheMaxAgeMs)) {
+          currentProvider = C8O.agentBridge.discoverVibeSettings(options, currentProvider);
+        }
+      }
+      providers[cachedProviderIndex] = requireProviderAuthentication(currentProvider);
+    }
+    if (!presenceOnly) {
       writePersistentProviderSettingsCache(settingsWorkspaceRoot, providers);
     }
-    var defaultProvider = providers.length ? providers[0] : null;
+    if (boolValue(options.savePreferences, false)) {
+      var requestedPreferences = validatedAgentPreferences({
+        confirmed: true,
+        provider: options.provider || options.agent || options.agentProvider,
+        model: options.model,
+        reasoning: options.reasoningEffort || options.reasoningLevel,
+        serviceTier: options.serviceTier,
+        updatedAt: now()
+      }, providers);
+      if (requestedPreferences !== null) {
+        writePersistentAgentPreferences(settingsWorkspaceRoot, options, requestedPreferences);
+      }
+    }
+    var preferences = validatedAgentPreferences(readPersistentAgentPreferences(settingsWorkspaceRoot, options), providers);
+    var defaultProvider = null;
     for (var i = 0; i < providers.length; i++) {
       if (providers[i].ready === true) {
         defaultProvider = providers[i];
@@ -5474,6 +6669,11 @@
     if (defaultProvider !== null) {
       defaults.reasoning = providerDefaultReasoning(defaultProvider);
     }
+    if (preferences !== null && preferences.confirmed === true) {
+      defaults.provider = preferences.provider;
+      defaults.model = preferences.model;
+      defaults.reasoning = preferences.reasoning;
+    }
     var storageCleanup = C8O.agentBridge.cleanupStorage({
       workspaceRoot: settingsWorkspaceRoot
     });
@@ -5483,6 +6683,7 @@
       agentProfile: publicAgentCapabilityProfile(options),
       agentProfiles: publicAgentCapabilityProfiles(),
       defaults: defaults,
+      preferences: preferences,
       providers: providers,
       storageCleanup: {
         status: storageCleanup.status,
@@ -5627,6 +6828,8 @@
       activeTurnId: "",
       init: null,
       session: null,
+      configOptions: [],
+      providerSettings: null,
       lastError: "",
       lastCodexProgressMessage: "",
       lastCodexAnswerChunk: "",
@@ -6036,6 +7239,16 @@
       pushEvent(entry, "session/update", eventData);
       return;
     }
+    if (kind === "config_option_update") {
+      var configOptions = update.configOptions || update.config_options || [];
+      var providerSettings = updateVibeProviderSettings(entry, configOptions);
+      pushEvent(entry, "config/update", {
+        sessionId: eventData.sessionId,
+        model: providerSettings && providerSettings.defaultModel || entry.model || "",
+        reasoningEffort: providerSettings ? providerDefaultReasoning(providerSettings) : (entry.reasoningEffort || "")
+      });
+      return;
+    }
 
     pushEvent(entry, "acp/session_update", eventData);
   }
@@ -6204,7 +7417,7 @@
     return [{
       type: "http",
       name: "Convertigo",
-      url: mcpEndpoint,
+      url: managedMcpTransportEndpoint(mcpEndpoint),
       headers: []
     }];
   }
@@ -6258,6 +7471,7 @@
   function startProcess(entry, env) {
     var pb = new ProcessBuilder(toJavaList(entry.command));
     pb.directory(new File(entry.cwd));
+    applyEngineProxyEnvironment(pb.environment(), agentProxyTargetUrl(entry.provider, env));
     envObjectToMap(pb.environment(), env);
     entry.process = pb.start();
     entry.writer = new BufferedWriter(new OutputStreamWriter(entry.process.getOutputStream(), StandardCharsets.UTF_8));

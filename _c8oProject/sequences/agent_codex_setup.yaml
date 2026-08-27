@@ -18,6 +18,9 @@ responseTimeout: 900
       mcpEndpoint: typeof mcpEndpoint === "undefined" ? "" : mcpEndpoint,
       codexPath: typeof codexPath === "undefined" ? "" : codexPath,
       install: typeof install === "undefined" ? "" : install,
+      codexLogin: typeof codexLogin === "undefined" ? "" : codexLogin,
+      codexLoginStatus: typeof codexLoginStatus === "undefined" ? "" : codexLoginStatus,
+      forceLogin: typeof forceLogin === "undefined" ? "" : forceLogin,
       nodeVersion: typeof nodeVersion === "undefined" ? "" : nodeVersion,
       nodeDir: typeof nodeDir === "undefined" ? "" : nodeDir,
       npmPath: typeof npmPath === "undefined" ? "" : npmPath,
@@ -200,3 +203,15 @@ responseTimeout: 900
 ↓playwrightMcpEndpoint [variables.RequestableVariable-1782731001358]: 
   comment: Optional alias for the Playwright MCP CDP endpoint.
   description: Optional alias for the Playwright MCP CDP endpoint.
+↓codexLogin [variables.RequestableVariable-1787835601378]: 
+  comment: When true, starts browser-based Codex authentication asynchronously.
+  description: When true, starts browser-based Codex authentication asynchronously.
+  schemaType: xsd:boolean
+↓codexLoginStatus [variables.RequestableVariable-1787835602159]: 
+  comment: When true, returns the current browser-based Codex authentication status.
+  description: When true, returns the current browser-based Codex authentication status.
+  schemaType: xsd:boolean
+↓forceLogin [variables.RequestableVariable-1787835602898]: 
+  comment: When true, starts a fresh Codex login even when scoped credentials look configured.
+  description: When true, starts a fresh Codex login even when scoped credentials look configured.
+  schemaType: xsd:boolean
