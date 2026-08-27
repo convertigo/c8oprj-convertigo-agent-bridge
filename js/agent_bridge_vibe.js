@@ -37,7 +37,7 @@
         throw new Error(setup.home.error);
       }
       if (configure) {
-        if (setup.config.selected.valid && trim(setup.config.selected.endpoint) === trim(setup.mcpEndpoint)) {
+        if (setup.config.selected.valid && trim(setup.config.selected.endpoint) === managedMcpTransportEndpoint(setup.mcpEndpoint)) {
           messages.push("Local VIBE_HOME config reused: " + setup.config.selected.path);
         } else {
           var written = writeLocalVibeConfig(setup.vibeHome, setup.mcpEndpoint, options.model || options.agentModel);
@@ -119,11 +119,17 @@
         if (fallbackSkills.error) {
           messages.push(fallbackSkills.error);
         }
+        var fallbackAuthentication = inspectVibeAuthentication(setup.vibeHome);
+        var fallbackReady = fallbackAuthentication.configured === true;
+        if (!fallbackReady) {
+          messages.push("Vibe authentication is required. Configure MISTRAL_API_KEY in the Vibe profile.");
+        }
         return {
-          ok: true,
-          status: "ready",
+          ok: fallbackReady,
+          status: fallbackReady ? "ready" : "authentication_required",
           phase: "fallback",
           setup: setup,
+          authentication: fallbackAuthentication,
           installation: installation,
           bootstrap: bootstrap,
           skills: fallbackSkills,
@@ -145,9 +151,14 @@
     }
 
     setup = detectRuntime(options);
-    var ready = setup.vibe.found && setup.vibeAcp.found && (!workspaceFirst || (
+    var runtimeReady = setup.vibe.found && setup.vibeAcp.found && (!workspaceFirst || (
       commandPathStartsWith(setup.vibe, setup.venvDir) && commandPathStartsWith(setup.vibeAcp, setup.venvDir)
     ));
+    var authentication = inspectVibeAuthentication(setup.vibeHome);
+    var ready = runtimeReady && authentication.configured === true;
+    if (runtimeReady && !ready) {
+      messages.push("Vibe authentication is required. Configure MISTRAL_API_KEY in the Vibe profile.");
+    }
     var skills = installAgentSkills(options, "vibe", setup.vibeHome);
     if (!setup.config.selected.valid) {
       messages.push("Selected VIBE_HOME has no valid Convertigo MCP HTTP server config yet");
@@ -160,8 +171,9 @@
     }
     return {
       ok: ready,
-      status: ready ? "ready" : "missing",
+      status: ready ? "ready" : (runtimeReady ? "authentication_required" : "missing"),
       setup: setup,
+      authentication: authentication,
       installation: installation,
       bootstrap: bootstrap,
       skills: skills,
@@ -268,11 +280,12 @@
       configure: autoConfigure
     });
     if (!setup.ok) {
+      var authenticationRequired = setup.status === "authentication_required";
       return {
         ok: false,
-        status: "error",
+        status: authenticationRequired ? "authentication_required" : "error",
         phase: "setup",
-        error: "vibe and vibe-acp are required before start",
+        error: authenticationRequired ? "Vibe authentication is required before start" : "vibe and vibe-acp are required before start",
         setup: setup,
         timestamp: now()
       };

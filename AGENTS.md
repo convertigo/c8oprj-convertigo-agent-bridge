@@ -33,6 +33,15 @@ same context.
 - Startup environment checks must use `runtimePresenceOnly`. This checks known
   managed paths and `PATH` entries without invoking the CLI; full model
   discovery is deferred until configuration is opened or the agent starts.
+- Provider readiness requires both a usable managed runtime and locally
+  configured authentication. Settings expose only authentication presence,
+  status, source type, and the required action; never expose credential values.
+  Codex accepts a scoped/user `auth.json` or `OPENAI_API_KEY`. Vibe accepts
+  `MISTRAL_API_KEY` from the scoped/user `.vibe/.env` or process environment.
+- When no provider is ready, settings must leave the default provider empty so
+  the Assistant can ask the user to choose Vibe or Codex. Runtime setup may
+  finish with `authentication_required`; session start must stop immediately in
+  that state instead of spawning a process that will fail remotely.
 - Runtime installation and updates are explicit operations. Codex updates use
   the managed `@openai/codex@latest` package and Vibe updates use the managed
   `mistral-vibe` package. Do not silently update a provider while starting or

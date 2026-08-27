@@ -15,7 +15,7 @@
   var MAX_EVENT_LIMIT = 500;
   var MAX_EVENT_BUFFER = 5000;
   var NOCODE_MCP_TOKEN_ENV = "C8O_NOCODE_MCP_TOKEN";
-  var MCP_GUIDANCE_VERSION = "2026-07-29.convergent-workflow-v3";
+  var MCP_GUIDANCE_VERSION = "2026-07-30.conversation-bootstrap-v4";
 
   var File = Packages.java.io.File;
   var FileOutputStream = Packages.java.io.FileOutputStream;
@@ -34,6 +34,7 @@
   var HashMap = Packages.java.util.HashMap;
   var ConcurrentHashMap = Packages.java.util.concurrent.ConcurrentHashMap;
   var LinkedHashMap = Packages.java.util.LinkedHashMap;
+  var Base64 = Packages.java.util.Base64;
   var Collections = Packages.java.util.Collections;
   var TimeUnit = Packages.java.util.concurrent.TimeUnit;
   var Files = Packages.java.nio.file.Files;
@@ -110,6 +111,7 @@
       "formId", "pageId", "applicationId", "currentPage", "currentApplicationId",
       "codexHomeScope", "vibeHomeScope", "homeScope", "codexHome", "vibeHome", "agentHome",
       "mcpEndpoint", "workspaceRoot", "settingsTimeoutMs", "modelsTimeoutMs",
+      "model", "reasoningEffort", "reasoningLevel", "serviceTier", "savePreferences",
       "checkUpdates", "refreshUpdateCheck", "updateCheckTimeoutMs", "updateCheckCacheMs", "runtimePresenceOnly",
       "codexRuntimeMode", "codexProtocol",
       "agentRevealMode", "convertigoRevealMode", "uiRevealMode", "revealMode",
@@ -187,6 +189,45 @@
       "",
       text
     ].join("\n");
+  }
+
+  function withManagedGuidancePreflight(promptText, options) {
+    var text = String(promptText || "");
+    var marker = "Convertigo managed preflight for this turn";
+    if (text.indexOf(marker) !== -1) {
+      return text;
+    }
+    options = options || {};
+    var endpoint = trim(options.mcpEndpoint);
+    var lines = [
+      marker + ":",
+      "- Scoped agent setup status: current.",
+      "- Current Convertigo guidance version: " + MCP_GUIDANCE_VERSION + ".",
+      "- Do not call `_setupCodex`, do not update the global Codex home, and do not repeat setup for this turn.",
+      "- Treat guidance mismatch warnings from earlier conversation turns as stale. React only if a current Convertigo MCP call returns a new mismatch warning."
+    ];
+    if (endpoint.length) {
+      lines.splice(2, 0, "- Current Convertigo MCP endpoint: " + endpoint + ".");
+    }
+    lines.push("");
+    lines.push(text);
+    return lines.join("\n");
+  }
+
+  function managedMcpTransportEndpoint(endpoint) {
+    var text = trim(endpoint);
+    var fragment = "";
+    var hash = text.indexOf("#");
+    if (hash >= 0) {
+      fragment = text.substring(hash);
+      text = text.substring(0, hash);
+    }
+    if (/(^|[?&])jsonOnly=[^&]*/i.test(text)) {
+      text = text.replace(/(^|[?&])jsonOnly=[^&]*/i, "$1jsonOnly=true");
+    } else {
+      text += (text.indexOf("?") >= 0 ? "&" : "?") + "jsonOnly=true";
+    }
+    return text + fragment;
   }
 
   function intValue(value, defaultValue, minValue, maxValue) {
@@ -1395,15 +1436,39 @@
     };
   }
 
-  function patchCodexMcpConfigText(existingText, mcpEndpoint, options) {
+  function codexSkillGuidanceVersion(homePath, options) {
+    var home = trim(homePath);
+    if (!home.length) {
+      return MCP_GUIDANCE_VERSION;
+    }
+    var preferred = managedSkillSlug(normalizeSkillProfile(options || {}));
+    var slugs = [preferred, "convertigo-generalist", "convertigo-nocode"];
+    var seen = {};
+    for (var i = 0; i < slugs.length; i++) {
+      var slug = trim(slugs[i]);
+      if (!slug.length || seen[slug]) {
+        continue;
+      }
+      seen[slug] = true;
+      var skillFile = new File(new File(new File(home), "skills"), slug + File.separator + "SKILL.md");
+      var source = readTextFile(skillFile);
+      var match = /^- Skill guidance version:\s*`([^`]+)`\./m.exec(source);
+      if (match !== null && trim(match[1]).length) {
+        return trim(match[1]);
+      }
+    }
+    return MCP_GUIDANCE_VERSION;
+  }
+
+  function patchCodexMcpConfigText(existingText, mcpEndpoint, options, homePath) {
     options = options || {};
     var text = String(existingText == null ? "" : existingText).replace(/\r\n?/g, "\n");
     var lines = trim(text).length ? splitTextLines(text) : [];
     var range = findTomlSectionRange(lines, "mcp_servers.convertigo");
-    var urlLine = 'url = "' + tomlEscape(mcpEndpoint) + '"';
+    var urlLine = 'url = "' + tomlEscape(managedMcpTransportEndpoint(mcpEndpoint)) + '"';
     var timeoutLine = "startup_timeout_sec = 60";
     var enabledLine = "enabled = true";
-    var guidanceHeaderEntry = '"X-Convertigo-Guidance-Version" = "' + tomlEscape(MCP_GUIDANCE_VERSION) + '"';
+    var guidanceHeaderEntry = '"X-Convertigo-Guidance-Version" = "' + tomlEscape(codexSkillGuidanceVersion(homePath, options)) + '"';
     var viewerDebugPort = intValue(options.viewerDebugPort, 0, 0, 65535);
     var viewerDebugPortHeaderEntry = viewerDebugPort >= 1024
       ? '"X-Convertigo-Viewer-Debug-Port" = "' + tomlEscape(String(viewerDebugPort)) + '"'
@@ -1616,6 +1681,8 @@
       "",
       "## Mandatory bootstrap",
       "",
+      "Bootstrap is required once per agent conversation for a given MCP endpoint and guidance version, not once per user message. On follow-up turns, reuse the skill, capabilities, and route guides already present in the conversation context. Do not reopen this `SKILL.md`, reread `convertigo://capabilities`, or reread an already-used guide unless the MCP endpoint changed, the MCP reports a guidance-version mismatch, or the required bootstrap context is explicitly unavailable.",
+      "",
       "1. Read `convertigo://capabilities` directly and verify the skill freshness rule above.",
       "2. Do not call `resources/list`, `resources/templates/list`, or `prompts/list` when this skill already names the required URI or tool. Use catalog discovery only when the task cannot be routed from this skill, a named resource is missing, or the MCP reports a guidance mismatch.",
       "3. Select the smallest matching route and read only its entry recipe before mutation:",
@@ -1633,6 +1700,13 @@
       "- Do not repeat catalog, guide, palette, tree, builder, or browser reads whose answer is already present in the current conversation.",
       "- Use `palette-list` to locate an unfamiliar object type and `palette-describe` only for properties that remain uncertain. Group independent descriptions when the caller can do so safely.",
       "- Build one coherent mutation plan before the first write. Prefer one optimized `batch-call` for independent or ordered source-object changes, followed by one targeted readback.",
+      "- A class/property shape already used successfully in the current conversation or returned by a targeted tree read is a confirmed contract. Do not reconfirm it through palette calls or tool-metadata inspection.",
+      "- Common NGX contracts that do not require palette discovery are `UIStyle#UIStyle.styleContent`, `UIAttribute#UIAttribute.attrName/attrValue`, `UIDynamicElement#TextItem`, and `UIText#UIText.textValue`.",
+      "- For one intent spanning independent targets, call `batch-call` with `{calls:[{tool:\"databaseobject-tree-apply\",arguments:{...}}],onError:\"stop\",optimizeMutations:true}`. The optimized batch performs one final refresh, save, and mobile-builder notification.",
+      "- Named core tools in this skill are already routed. Do not inspect `ALL_TOOLS` merely to rediscover the signatures of `batch-call`, `mobile-builder-open`, or Playwright snapshot/find/evaluate calls.",
+      "- For `databaseobject-tree-get`, use `childrenDepth` for recursive descendants and request the needed subtree once instead of walking one QName level per call. `depth` is accepted only as a compatibility alias.",
+      "- For `databaseobject-tree-apply` with `at:\"inside\"`, `tree` is the one child being created and must include its own `className` and `name`; never submit a children-only wrapper. Put sibling creations in separate optimized `batch-call` entries.",
+      "- For an unfamiliar NGX object, call `palette-list` with the exact intended parent QName as `target`, then pass its returned logical `className` unchanged to `palette-describe`. Do not list at project scope and guess a `#logicalId`.",
       "- Start the viewer asynchronously once UI work is known. Finish the source mutations while it builds, then perform one readiness check and one acceptance-oriented browser proof. Add another cycle only when the proof identifies a concrete defect.",
       "- A browser proof should evaluate all relevant acceptance criteria together when practical: visible content, layout/style, interaction or timed state, and console/runtime errors.",
       "- Stop after the requested behavior is green. Do not add an unsolicited polish pass or repeat proof that cannot change the conclusion.",
@@ -1653,6 +1727,8 @@
       "- For a new UI project, validate the name, run `marketplace-import` with that exact name, open the viewer immediately with `mobile-builder-open(wait=false)`, then continue with `upsert-crud` and the staged UI kit while the builder warms up.",
       "- For an existing deterministic CRUD project that is already green, use the edit rail: `crud-status` -> optional early `mobile-builder-open(wait=false)` when UI work is likely -> `upsert-crud` -> backend `crud-proof` -> one `upsert-ngx-crud-kit stage=final` -> `mobile-builder-open(stateOnly=true, wait=true)` -> final `crud-proof(viewerUrl)` -> optional `project-save`.",
       "- For a low-detail CRUD prompt, stop after the first green scaffold + demo data: starter import, viewer open, `upsert-crud`, backend proof, `upsert-ngx-crud-kit` bootstrap/final, final UI proof, optional `project-save`, then return.",
+      "- The low-detail stop rule applies only when the user requested generic CRUD. Before mutation, list the explicit acceptance behaviors from the request. Filters, counters, domain actions, dashboards, or other named interactions are not proven by the presence of fields or a generic list/detail/form shell; implement and validate each one before claiming completion.",
+      "- If the CRUD kit has no declarative hint for an explicit interaction, treat the generated kit as a starting point and perform one focused source-object extension before the final builder and browser proof.",
       "- When relations are obvious, declare them explicitly in `spec.relations[]` instead of relying only on flat FK fields. Prefer entity UI hints such as `ui.relationFields` over direct edits on generated CRUD-kit components.",
       "- Prefer `seed.data` for explicit business demo rows. Do not patch `init_schema` manually after generation when `seed.data` can express the dataset in the spec.",
       "- Once the CRUD guides already documented the contract, do not grep the local workspace to rediscover the shapes of `relations[]`, `ui.relationFields`, or `seed.data`.",
@@ -1804,7 +1880,7 @@
         var delegated = setupCodexFromMcpProject(options, codexHome, report.resolvedMcpUrl, profile);
         if (delegated.attempted === true && delegated.ok === true) {
           var delegatedConfig = readTextFile(configFile);
-          var delegatedPatch = patchCodexMcpConfigText(delegatedConfig, delegated.resolvedMcpUrl, options);
+          var delegatedPatch = patchCodexMcpConfigText(delegatedConfig, delegated.resolvedMcpUrl, options, codexHome);
           if (delegatedPatch.status !== "unchanged" && report.dryRun !== true) {
             writeTextFile(configFile, delegatedPatch.text);
           }
@@ -1836,7 +1912,7 @@
       var skillSource = managedSkillContent(options, profile, report.resolvedMcpUrl);
       var skillWrite = writeManagedTextFile(skillFile, skillSource.content, report.dryRun);
       var existingConfig = readTextFile(configFile);
-      var patchedConfig = patchCodexMcpConfigText(existingConfig, report.resolvedMcpUrl, options);
+      var patchedConfig = patchCodexMcpConfigText(existingConfig, report.resolvedMcpUrl, options, codexHome);
       if (patchedConfig.status !== "unchanged" && report.dryRun !== true) {
         writeTextFile(configFile, patchedConfig.text);
       }
@@ -1949,7 +2025,7 @@
         ""
       ].join("\n");
     }
-    var patched = patchCodexMcpConfigText(text, endpoint, options || {});
+    var patched = patchCodexMcpConfigText(text, endpoint, options || {}, configFile.getParentFile());
     if (patched.status === "unchanged") {
       return false;
     }
@@ -1971,7 +2047,7 @@
     report.copied.push(filename);
   }
 
-  function syncAgentUserFile(sourceDir, targetDir, filename, report) {
+  function syncAgentUserFile(sourceDir, targetDir, filename, report, force) {
     var source = new File(sourceDir, filename);
     if (!source.isFile()) {
       return;
@@ -1990,6 +2066,14 @@
           return;
         }
       } catch (_ignoreCodexHash) {}
+      if (force !== true) {
+        try {
+          if (Number(source.lastModified()) <= Number(target.lastModified())) {
+            report.reused.push(filename);
+            return;
+          }
+        } catch (_ignoreCodexTimestamp) {}
+      }
       copyFileBinary(source, target);
       if (!report.refreshed) {
         report.refreshed = [];
@@ -2001,6 +2085,73 @@
     report.copied.push(filename);
   }
 
+  function newestAgentUserFile(directories, filename) {
+    var selected = null;
+    for (var i = 0; directories && i < directories.length; i++) {
+      var candidate = new File(directories[i], filename);
+      if (!candidate.isFile()) {
+        continue;
+      }
+      if (selected === null || Number(candidate.lastModified()) > Number(selected.lastModified())) {
+        selected = candidate;
+      }
+    }
+    return selected;
+  }
+
+  function syncNewestAgentUserFile(sourceDirs, targetDir, filename, report) {
+    var source = newestAgentUserFile(sourceDirs, filename);
+    if (source === null) {
+      return;
+    }
+    syncAgentUserFile(source.getParentFile(), targetDir, filename, report);
+  }
+
+  function newestUsableCodexAuthFile(directories) {
+    var selected = null;
+    for (var i = 0; directories && i < directories.length; i++) {
+      var candidate = new File(directories[i], "auth.json");
+      var state = codexAuthFileState(candidate);
+      if (!state.exists || state.expired) {
+        continue;
+      }
+      if (selected === null || Number(candidate.lastModified()) > Number(selected.lastModified())) {
+        selected = candidate;
+      }
+    }
+    return selected;
+  }
+
+  function syncCodexAuthenticationFile(sourceDirs, targetDir, report) {
+    var source = newestUsableCodexAuthFile(sourceDirs);
+    if (source === null) {
+      syncNewestAgentUserFile(sourceDirs, targetDir, "auth.json", report);
+      return;
+    }
+    var targetState = codexAuthFileState(new File(targetDir, "auth.json"));
+    syncAgentUserFile(source.getParentFile(), targetDir, "auth.json", report, targetState.exists && targetState.expired);
+    report.authenticationSource = filePath(source.getParentFile());
+    report.authenticationImported = !targetState.exists || targetState.expired;
+  }
+
+  function codexCredentialSourceDirs(options, homeDir) {
+    options = options || {};
+    var sources = [];
+    var workspaceRoot = resolveWorkspaceRoot(options);
+    var installDir = normalizeDirectory(options.installDir, childPath(workspaceRoot, "agents/codex"), workspaceRoot);
+    var userHome = resolveCodexHome({
+      workspaceRoot: workspaceRoot,
+      installDir: installDir,
+      codexHomeScope: "user",
+      userId: trim(options.userId) || contextUserId()
+    }, installDir);
+    if (trim(userHome.path).length && filePath(new File(userHome.path)) !== filePath(homeDir)) {
+      sources.push(new File(userHome.path));
+    }
+    sources.push(new File(String(System.getProperty("user.home")), ".codex"));
+    return sources;
+  }
+
   function bootstrapCodexHome(options, homePath, mcpEndpoint) {
     var report = {
       attempted: false,
@@ -2010,6 +2161,8 @@
       reused: [],
       refreshed: [],
       generated: [],
+      authenticationSource: "",
+      authenticationImported: false,
       message: "",
       error: ""
     };
@@ -2022,10 +2175,10 @@
       var homeDir = new File(report.home);
       migrateLegacyHiddenCodexHome(homeDir, report);
       ensureDirectory(homeDir);
-      var userCodex = new File(String(System.getProperty("user.home")), ".codex");
-      syncAgentUserFile(userCodex, homeDir, "auth.json", report);
-      syncAgentUserFile(userCodex, homeDir, "auth.json.api", report);
-      syncAgentUserFile(userCodex, homeDir, "installation_id", report);
+      var credentialSources = codexCredentialSourceDirs(options, homeDir);
+      syncCodexAuthenticationFile(credentialSources, homeDir, report);
+      syncNewestAgentUserFile(credentialSources, homeDir, "auth.json.api", report);
+      syncNewestAgentUserFile(credentialSources, homeDir, "installation_id", report);
       var configFile = new File(homeDir, "config.toml");
       if (appendCodexConvertigoMcpConfig(configFile, mcpEndpoint, options)) {
         report.generated.push("config.toml");
@@ -2107,6 +2260,300 @@
     }
     result.keys.sort();
     return result;
+  }
+
+  function environmentHasValue(name) {
+    try {
+      return trim(System.getenv(name)).length > 0;
+    } catch (_ignoreEnvironmentValue) {
+      return false;
+    }
+  }
+
+  function fileHasContent(file) {
+    try {
+      return file !== null && file.isFile() && Number(file.length()) > 2;
+    } catch (_ignoreFileContent) {
+      return false;
+    }
+  }
+
+  function authenticationInfo(configured, method, action, status) {
+    return {
+      configured: configured === true,
+      status: trim(status) || (configured === true ? "configured" : "missing"),
+      method: configured === true ? String(method || "configured") : "",
+      action: configured === true ? "" : String(action || "")
+    };
+  }
+
+  function decodeJwtPayload(token) {
+    try {
+      var parts = trim(token).split(".");
+      if (parts.length < 2) {
+        return null;
+      }
+      var bytes = Base64.getUrlDecoder().decode(String(parts[1]));
+      return parseJsonSafe(String(new Packages.java.lang.String(bytes, StandardCharsets.UTF_8)), null);
+    } catch (_ignoreJwtPayload) {
+      return null;
+    }
+  }
+
+  function codexAuthFileState(file) {
+    if (!fileHasContent(file)) {
+      return { exists: false, expired: false, expiresAt: 0, updatedAt: 0 };
+    }
+    var parsed = readJsonFile(file) || {};
+    var tokens = parsed.tokens || {};
+    var payload = decodeJwtPayload(tokens.access_token);
+    var expiresAt = payload && Number(payload.exp) > 0 ? Number(payload.exp) * 1000 : 0;
+    return {
+      exists: true,
+      expired: expiresAt > 0 && expiresAt <= now() + 60000,
+      expiresAt: expiresAt,
+      updatedAt: Number(file.lastModified() || 0),
+      hasRefreshToken: trim(tokens.refresh_token).length > 0
+    };
+  }
+
+  function inspectCodexAuthentication(codexHome) {
+    if (environmentHasValue("OPENAI_API_KEY")) {
+      return authenticationInfo(true, "environment", "");
+    }
+    var homes = [];
+    if (trim(codexHome).length) {
+      homes.push(new File(trim(codexHome)));
+    }
+    homes.push(new File(String(System.getProperty("user.home")), ".codex"));
+    var firstExpired = null;
+    var seenHomes = {};
+    for (var i = 0; i < homes.length; i++) {
+      var homePath = filePath(homes[i]);
+      if (seenHomes[homePath]) {
+        continue;
+      }
+      seenHomes[homePath] = true;
+      var scoped = i === 0 && trim(codexHome).length > 0;
+      var chatAuth = codexAuthFileState(new File(homes[i], "auth.json"));
+      if (chatAuth.exists) {
+        if (chatAuth.expired) {
+          var expired = authenticationInfo(false, "", "codex_login", "expired");
+          expired.expiresAt = chatAuth.expiresAt;
+          expired.hasRefreshToken = chatAuth.hasRefreshToken === true;
+          expired.home = homePath;
+          if (firstExpired === null) {
+            firstExpired = expired;
+          }
+          continue;
+        }
+        var chat = authenticationInfo(true, scoped ? "scoped_home" : "user_home", "");
+        chat.home = homePath;
+        chat.expiresAt = chatAuth.expiresAt;
+        chat.updatedAt = chatAuth.updatedAt;
+        return chat;
+      }
+      if (fileHasContent(new File(homes[i], "auth.json.api"))) {
+        var api = authenticationInfo(true, scoped ? "scoped_home" : "user_home", "");
+        api.home = homePath;
+        return api;
+      }
+    }
+    return firstExpired !== null ? firstExpired : authenticationInfo(false, "", "codex_login");
+  }
+
+  function codexDoctorAuthentication(options, codexHome, commandPath, forceCheck) {
+    var authentication = inspectCodexAuthentication(codexHome);
+    if ((authentication.status !== "expired" && forceCheck !== true) || !trim(commandPath).length) {
+      return authentication;
+    }
+    var probeHome = trim(authentication.home) || trim(codexHome);
+    var probe = runCommandCaptured([trim(commandPath), "doctor", "--json"], {
+      timeoutMs: intValue(options && options.codexAuthCheckTimeoutMs, 20000, 3000, 60000),
+      env: codexRuntimeEnv(options || {}, probeHome)
+    });
+    var output = String((probe.stdout || "") + "\n" + (probe.stderr || ""));
+    var lower = output.toLowerCase();
+    var refreshed = inspectCodexAuthentication(codexHome);
+    var authFailure = lower.indexOf("failed to refresh token") >= 0 ||
+      lower.indexOf("please log out and sign in again") >= 0 ||
+      lower.indexOf("authentication expired") >= 0 ||
+      lower.indexOf("invalid_grant") >= 0;
+    if (authFailure) {
+      authentication.checked = true;
+      authentication.checkMethod = "doctor";
+      authentication.status = "expired";
+      return authentication;
+    }
+    var report = parseJsonSafe(probe.stdout, null);
+    var checks = report && report.checks ? report.checks : {};
+    var credentials = checks["auth.credentials"] || {};
+    var providerReachability = checks["network.provider_reachability"] || {};
+    var credentialsOk = trim(credentials.status).toLowerCase() === "ok";
+    var providerOk = trim(providerReachability.status).toLowerCase() === "ok";
+    if (refreshed.configured === true && (forceCheck !== true || (credentialsOk && providerOk))) {
+      refreshed.checked = true;
+      refreshed.checkMethod = "doctor";
+      return refreshed;
+    }
+    var websocket = checks["network.websocket_reachability"] || {};
+    if (credentialsOk && (providerOk || trim(websocket.status).toLowerCase() === "ok")) {
+      authentication = authenticationInfo(true, "scoped_home", "");
+      authentication.checked = true;
+      authentication.checkMethod = "doctor";
+      return authentication;
+    }
+    authentication.checked = true;
+    authentication.checkMethod = "doctor";
+    authentication.configured = false;
+    authentication.method = "";
+    authentication.action = "codex_login";
+    authentication.status = probe.error === "timeout" ? "check_timeout" : (authentication.status === "expired" ? "expired" : "invalid");
+    return authentication;
+  }
+
+  function codexAppServerAuthenticationProbe(options, codexHome, commandPath) {
+    var startedAt = now();
+    var result = {
+      checked: true,
+      valid: false,
+      unauthorized: false,
+      error: "",
+      durationMs: 0
+    };
+    var process = null;
+    var writer = null;
+    var reader = null;
+    var errFile = null;
+    var transcript = "";
+    try {
+      errFile = File.createTempFile("c8o-codex-auth-probe-", ".log");
+      var pb = new ProcessBuilder(toJavaList([trim(commandPath), "app-server", "--listen", "stdio://"]));
+      applyEngineProxyEnvironment(pb.environment(), "https://chatgpt.com");
+      envObjectToMap(pb.environment(), codexRuntimeEnv(options || {}, codexHome));
+      pb.redirectError(errFile);
+      process = pb.start();
+      writer = new BufferedWriter(new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8));
+      reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+      var send = function (message) {
+        writer.write(JSON.stringify(message));
+        writer.newLine();
+        writer.flush();
+      };
+      send({ id: 1, method: "initialize", params: { clientInfo: { name: "ConvertigoAgentBridge", version: "0.1.0" }, capabilities: null } });
+      var initialized = false;
+      var deadline = now() + intValue(options && options.codexAuthCheckTimeoutMs, 20000, 3000, 60000);
+      while (now() < deadline && processAlive(process)) {
+        if (!reader.ready()) {
+          Thread.sleep(25);
+          continue;
+        }
+        var line = reader.readLine();
+        if (line === null) {
+          break;
+        }
+        transcript += line + "\n";
+        var message = parseJsonSafe(line, null);
+        if (message === null) {
+          continue;
+        }
+        if (!initialized && String(message.id) === "1") {
+          if (message.error) {
+            result.error = trim(message.error.message || JSON.stringify(message.error));
+            break;
+          }
+          initialized = true;
+          send({ method: "initialized" });
+          send({ id: 2, method: "account/rateLimits/read" });
+          continue;
+        }
+        if (initialized && String(message.id) === "2") {
+          if (message.error) {
+            result.error = trim(message.error.message || JSON.stringify(message.error));
+          } else {
+            result.valid = true;
+          }
+          break;
+        }
+      }
+      if (!result.valid && !result.error.length) {
+        result.error = now() >= deadline ? "timeout" : "Codex authentication probe ended without a response";
+      }
+    } catch (e) {
+      result.error = String(e);
+    } finally {
+      try { if (writer !== null) { writer.close(); } } catch (_ignoreAuthProbeWriterClose) {}
+      try { if (reader !== null) { reader.close(); } } catch (_ignoreAuthProbeReaderClose) {}
+      try { if (process !== null && processAlive(process)) { process.destroyForcibly(); } } catch (_ignoreAuthProbeDestroy) {}
+      try {
+        if (errFile !== null && errFile.isFile()) {
+          transcript += "\n" + readTextFile(errFile);
+        }
+      } catch (_ignoreAuthProbeStderr) {}
+      try { if (errFile !== null) { Files.deleteIfExists(errFile.toPath()); } } catch (_ignoreAuthProbeDelete) {}
+    }
+    var lower = String(transcript + "\n" + result.error).toLowerCase();
+    result.unauthorized = lower.indexOf("401 unauthorized") >= 0 ||
+      lower.indexOf("refresh token was revoked") >= 0 ||
+      lower.indexOf("failed to refresh token") >= 0 ||
+      lower.indexOf("invalid_grant") >= 0 ||
+      lower.indexOf("please log out and sign in again") >= 0;
+    result.durationMs = now() - startedAt;
+    return result;
+  }
+
+  function verifiedCodexAuthentication(options, codexHome, commandPath, forceCheck) {
+    var authentication = codexDoctorAuthentication(options, codexHome, commandPath, forceCheck);
+    if (authentication.configured !== true || !trim(commandPath).length) {
+      return authentication;
+    }
+    var authHome = trim(authentication.home) || trim(codexHome);
+    var cacheOptions = {};
+    options = options || {};
+    for (var key in options) {
+      if (Object.prototype.hasOwnProperty.call(options, key)) {
+        cacheOptions[key] = options[key];
+      }
+    }
+    cacheOptions.updateCheckCacheMs = intValue(options.codexAuthCheckCacheMs, DEFAULT_RUNTIME_UPDATE_CACHE_MS, 60000, 86400000);
+    cacheOptions.refreshUpdateCheck = forceCheck === true || boolValue(options.refreshCodexAuthCheck, false) || boolValue(options.refreshUpdateCheck, false);
+    var cacheKey = "codex-auth:" + hashShort(authHome + ":" + String(authentication.updatedAt || 0));
+    var probe = cachedRuntimeUpdate(cacheKey, cacheOptions, resolveWorkspaceRoot(options), function () {
+      return codexAppServerAuthenticationProbe(options, authHome, commandPath);
+    });
+    authentication.checked = true;
+    authentication.checkMethod = "app-server-rate-limits";
+    authentication.check = probe;
+    if (probe.unauthorized === true) {
+      authentication.configured = false;
+      authentication.status = "expired";
+      authentication.method = "";
+      authentication.action = "codex_login";
+    }
+    return authentication;
+  }
+
+  function vibeEnvHasApiKey(file) {
+    try {
+      var parsed = readEnvFile(file);
+      return trim(parsed.values.MISTRAL_API_KEY).length > 0;
+    } catch (_ignoreVibeEnv) {
+      return false;
+    }
+  }
+
+  function inspectVibeAuthentication(vibeHome) {
+    if (environmentHasValue("MISTRAL_API_KEY")) {
+      return authenticationInfo(true, "environment", "");
+    }
+    if (trim(vibeHome).length && vibeEnvHasApiKey(new File(trim(vibeHome), ".env"))) {
+      return authenticationInfo(true, "scoped_home", "");
+    }
+    var userEnv = new File(new File(String(System.getProperty("user.home")), ".vibe"), ".env");
+    if (vibeEnvHasApiKey(userEnv)) {
+      return authenticationInfo(true, "user_home", "");
+    }
+    return authenticationInfo(false, "", "mistral_api_key");
   }
 
   function projectWorkspaceRoot(projectName) {
@@ -2593,7 +3040,10 @@
     if (value.providers === null || typeof value.providers !== "object") {
       value.providers = {};
     }
-    value.version = 3;
+    if (value.preferences === null || typeof value.preferences !== "object") {
+      value.preferences = {};
+    }
+    value.version = 4;
     return {
       file: file,
       value: value
@@ -2610,6 +3060,101 @@
       }
     }
     return models.length ? trim(models[0] && models[0].defaultReasoning) : "";
+  }
+
+  function agentPreferenceKey(options) {
+    options = options || {};
+    var user = trim(options.userId) || contextUserId() || "studio";
+    var profile = normalizeSkillProfile(options) || "generalist";
+    return userPathSlug(user) + ":" + userPathSlug(profile);
+  }
+
+  function readPersistentAgentPreferences(workspaceRoot, options) {
+    try {
+      var persistent = readPersistentRuntimeUpdateCache(workspaceRoot);
+      return persistent.value.preferences[agentPreferenceKey(options)] || null;
+    } catch (_ignorePersistentAgentPreferencesRead) {}
+    return null;
+  }
+
+  function writePersistentAgentPreferences(workspaceRoot, options, preferences) {
+    var persistent = readPersistentRuntimeUpdateCache(workspaceRoot);
+    if (persistent.file === null) {
+      return;
+    }
+    var lock = null;
+    try {
+      lock = acquireFileLock(new File(persistent.file.getParentFile(), RUNTIME_UPDATE_CACHE_FILE + ".lock"), 5000);
+      persistent = readPersistentRuntimeUpdateCache(workspaceRoot);
+      persistent.value.preferences[agentPreferenceKey(options)] = preferences;
+      writeTextFile(persistent.file, JSON.stringify(persistent.value, null, 2) + "\n");
+    } catch (_ignorePersistentAgentPreferencesWrite) {
+    } finally {
+      if (lock !== null) {
+        lock.release();
+      }
+    }
+  }
+
+  function validatedAgentPreferences(preferences, providers) {
+    preferences = preferences || {};
+    providers = providers || [];
+    var providerId = normalizeProvider(preferences.provider);
+    var provider = null;
+    for (var i = 0; i < providers.length; i++) {
+      if (normalizeProvider(providers[i] && providers[i].id) === providerId && providers[i].ready === true) {
+        provider = providers[i];
+        break;
+      }
+    }
+    if (provider === null) {
+      return null;
+    }
+    var models = provider.models || [];
+    var modelId = trim(preferences.model);
+    var model = null;
+    for (var j = 0; j < models.length; j++) {
+      if (trim(models[j] && models[j].id) === modelId) {
+        model = models[j];
+        break;
+      }
+    }
+    if (model === null) {
+      modelId = trim(provider.defaultModel);
+      for (var k = 0; k < models.length; k++) {
+        if (trim(models[k] && models[k].id) === modelId) {
+          model = models[k];
+          break;
+        }
+      }
+    }
+    if (model === null && models.length) {
+      model = models[0];
+      modelId = trim(model.id);
+    }
+    var reasoning = trim(preferences.reasoning);
+    var reasoningLevels = model && model.reasoningLevels ? model.reasoningLevels : [];
+    var reasoningValid = !reasoning.length;
+    for (var r = 0; r < reasoningLevels.length; r++) {
+      if (trim(reasoningLevels[r] && reasoningLevels[r].id) === reasoning) {
+        reasoningValid = true;
+        break;
+      }
+    }
+    if (!reasoningValid) {
+      reasoning = trim(model && model.defaultReasoning);
+    }
+    if (!(provider.supports && provider.supports.reasoning === true)) {
+      reasoning = "";
+    }
+    return {
+      confirmed: preferences.confirmed === true,
+      provider: providerId,
+      model: modelId,
+      reasoning: reasoning,
+      serviceTier: trim(preferences.serviceTier),
+      updatedAt: Number(preferences.updatedAt || 0)
+    };
   }
 
   function compactProviderSettingsCache(provider) {
@@ -2697,6 +3242,41 @@
     provider.source = provider.source || {};
     provider.source.settingsCached = true;
     provider.source.settingsCachedAt = Number(cached.cachedAt || 0);
+    return provider;
+  }
+
+  function requireCachedProviderConfiguration(provider) {
+    provider = provider || {};
+    if (provider.ready !== true) {
+      return provider;
+    }
+    var models = provider.models || [];
+    var defaultModel = trim(provider.defaultModel);
+    var defaultModelFound = false;
+    for (var i = 0; i < models.length; i++) {
+      if (trim(models[i] && models[i].id) === defaultModel) {
+        defaultModelFound = true;
+        break;
+      }
+    }
+    if (!models.length || !defaultModel.length || !defaultModelFound) {
+      provider.ready = false;
+      provider.status = "configuration_required";
+      provider.source = provider.source || {};
+      provider.source.error = "Provider model catalog is not cached";
+    }
+    return provider;
+  }
+
+  function requireProviderAuthentication(provider) {
+    provider = provider || {};
+    var authentication = provider.authentication || authenticationInfo(false, "", "authenticate");
+    if (provider.runtime && provider.runtime.installed === true && authentication.configured !== true) {
+      provider.ready = false;
+      provider.status = "authentication_required";
+      provider.source = provider.source || {};
+      provider.source.error = "Provider authentication is required";
+    }
     return provider;
   }
 
@@ -4174,7 +4754,7 @@
       '[[mcp_servers]]',
       'name = "Convertigo"',
       'transport = "http"',
-      'url = "' + tomlString(mcpEndpoint) + '"',
+      'url = "' + tomlString(managedMcpTransportEndpoint(mcpEndpoint)) + '"',
       'startup_timeout_sec = 60.0',
       ''
     ].join("\n");
@@ -4805,6 +5385,7 @@
       status: setup.codex.found ? "ready" : "missing",
       ready: setup.codex.found === true,
       runtime: runtime,
+      authentication: verifiedCodexAuthentication(options, setup.codexHome, setup.codex.path, !presenceOnly && bootstrap && bootstrap.authenticationImported === true),
       setup: compactCodexSetup(setup),
       bootstrap: bootstrap,
       skills: skills,
@@ -5069,6 +5650,7 @@
       status: managedVibeReady ? "ready" : "missing",
       ready: managedVibeReady,
       runtime: runtime,
+      authentication: inspectVibeAuthentication(setup.vibeHome),
       setup: compactVibeSetup(setup),
       source: {
         type: config.exists ? "config" : "fallback",
@@ -5543,18 +6125,36 @@
     for (var cachedProviderIndex = 0; cachedProviderIndex < providers.length; cachedProviderIndex++) {
       var currentProvider = providers[cachedProviderIndex];
       currentProvider = hydrateProviderSettingsFromCache(settingsWorkspaceRoot, currentProvider, normalizeProvider(currentProvider.id) === "vibe");
+      if (presenceOnly) {
+        currentProvider = requireCachedProviderConfiguration(currentProvider);
+      }
+      currentProvider = requireProviderAuthentication(currentProvider);
       if (!presenceOnly && normalizeProvider(currentProvider.id) === "vibe" && currentProvider.ready === true && typeof C8O.agentBridge.discoverVibeSettings === "function") {
         var refreshProviderSettings = boolValue(options.refreshProviderSettings || options.refreshModelCatalog || options.refreshUpdateCheck, false);
         if (refreshProviderSettings || !providerSettingsCacheFresh(currentProvider, settingsCacheMaxAgeMs)) {
           currentProvider = C8O.agentBridge.discoverVibeSettings(options, currentProvider);
         }
       }
-      providers[cachedProviderIndex] = currentProvider;
+      providers[cachedProviderIndex] = requireProviderAuthentication(currentProvider);
     }
     if (!presenceOnly) {
       writePersistentProviderSettingsCache(settingsWorkspaceRoot, providers);
     }
-    var defaultProvider = providers.length ? providers[0] : null;
+    if (boolValue(options.savePreferences, false)) {
+      var requestedPreferences = validatedAgentPreferences({
+        confirmed: true,
+        provider: options.provider || options.agent || options.agentProvider,
+        model: options.model,
+        reasoning: options.reasoningEffort || options.reasoningLevel,
+        serviceTier: options.serviceTier,
+        updatedAt: now()
+      }, providers);
+      if (requestedPreferences !== null) {
+        writePersistentAgentPreferences(settingsWorkspaceRoot, options, requestedPreferences);
+      }
+    }
+    var preferences = validatedAgentPreferences(readPersistentAgentPreferences(settingsWorkspaceRoot, options), providers);
+    var defaultProvider = null;
     for (var i = 0; i < providers.length; i++) {
       if (providers[i].ready === true) {
         defaultProvider = providers[i];
@@ -5569,6 +6169,11 @@
     if (defaultProvider !== null) {
       defaults.reasoning = providerDefaultReasoning(defaultProvider);
     }
+    if (preferences !== null && preferences.confirmed === true) {
+      defaults.provider = preferences.provider;
+      defaults.model = preferences.model;
+      defaults.reasoning = preferences.reasoning;
+    }
     var storageCleanup = C8O.agentBridge.cleanupStorage({
       workspaceRoot: settingsWorkspaceRoot
     });
@@ -5576,6 +6181,7 @@
       ok: providers.length > 0,
       status: providers.length ? "ready" : "empty",
       defaults: defaults,
+      preferences: preferences,
       providers: providers,
       storageCleanup: {
         status: storageCleanup.status,
@@ -6309,7 +6915,7 @@
     return [{
       type: "http",
       name: "Convertigo",
-      url: mcpEndpoint,
+      url: managedMcpTransportEndpoint(mcpEndpoint),
       headers: []
     }];
   }

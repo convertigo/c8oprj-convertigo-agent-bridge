@@ -1340,8 +1340,170 @@
     });
   }
 
+  var CODEX_LOGIN_REGISTRY_KEY = "ConvertigoAgentBridge.codexLoginRegistry.v1";
+
+  function codexLoginRegistry() {
+    var store = getServerStore();
+    if (store !== null) {
+      var registry = store.get(CODEX_LOGIN_REGISTRY_KEY);
+      if (registry === null || typeof registry === "undefined") {
+        registry = new ConcurrentHashMap();
+        store.set(CODEX_LOGIN_REGISTRY_KEY, registry);
+      }
+      return registry;
+    }
+    if (!C8O.agentBridge._fallbackCodexLoginRegistry) {
+      C8O.agentBridge._fallbackCodexLoginRegistry = new ConcurrentHashMap();
+    }
+    return C8O.agentBridge._fallbackCodexLoginRegistry;
+  }
+
+  function codexLoginOptions(options) {
+    options = optionsWithRequestFallbacks(options || {});
+    var copy = {};
+    for (var key in options) {
+      if (Object.prototype.hasOwnProperty.call(options, key)) {
+        copy[key] = options[key];
+      }
+    }
+    copy.codexHome = "";
+    copy.agentHome = "";
+    copy.codexHomeScope = "user";
+    copy.homeScope = "user";
+    copy.userId = trim(options.userId) || contextUserId() || "studio";
+    return copy;
+  }
+
+  function codexLoginKey(homePath) {
+    return "codex-login:" + filePath(new File(homePath));
+  }
+
+  function codexLoginOutput(entry) {
+    var output = "";
+    try { output += readTextFile(entry.stdoutFile); } catch (_ignoreLoginOut) {}
+    try { output += "\n" + readTextFile(entry.stderrFile); } catch (_ignoreLoginErr) {}
+    output = output.replace(/(access_token|refresh_token|id_token)\s*[:=]\s*[^\s]+/gi, "$1=<redacted>");
+    if (output.length > 8000) {
+      output = "... " + output.substring(output.length - 8000);
+    }
+    return output;
+  }
+
+  function codexLoginUrl(output) {
+    var match = String(output || "").match(/https:\/\/[^\s<>'\"]+/i);
+    return match ? match[0].replace(/[),.;]+$/, "") : "";
+  }
+
+  function publicCodexLogin(entry) {
+    var output = codexLoginOutput(entry);
+    var alive = processAlive(entry.process);
+    var exitCode = -1;
+    if (!alive) {
+      try { exitCode = Number(entry.process.exitValue()); } catch (_ignoreLoginExit) {}
+    }
+    var authentication = inspectCodexAuthentication(entry.home);
+    var credentialsUpdated = authentication.configured === true && Number(authentication.updatedAt || 0) >= Number(entry.startedAt || 0);
+    if (alive && credentialsUpdated) {
+      try { entry.process.destroy(); } catch (_ignoreCompletedLoginDestroy) {}
+      alive = false;
+      exitCode = 0;
+    }
+    var authenticated = authentication.configured === true && (!alive || credentialsUpdated);
+    return {
+      ok: alive || authenticated,
+      status: alive ? "waiting_for_login" : (authenticated ? "authenticated" : "error"),
+      running: alive,
+      authenticated: authenticated,
+      home: entry.home,
+      verificationUrl: codexLoginUrl(output),
+      message: alive ? "Waiting for Codex browser authentication." : (authenticated ? "Codex authentication completed." : "Codex authentication did not complete."),
+      error: !alive && !authenticated ? trim(output) : "",
+      startedAt: Number(entry.startedAt || 0),
+      timestamp: now()
+    };
+  }
+
+  C8O.agentBridge.codexLoginStatus = function (options) {
+    var loginOptions = codexLoginOptions(options);
+    var setup = detectCodexRuntimePresence(loginOptions);
+    if (!setup.codex || setup.codex.found !== true || !trim(setup.codexHome).length) {
+      return { ok: false, status: "missing", error: "Managed Codex runtime is not available.", timestamp: now() };
+    }
+    var entry = codexLoginRegistry().get(codexLoginKey(setup.codexHome));
+    if (entry === null || typeof entry === "undefined") {
+      var authentication = inspectCodexAuthentication(setup.codexHome);
+      return {
+        ok: authentication.configured === true,
+        status: authentication.configured === true ? "authenticated" : "login_required",
+        running: false,
+        authenticated: authentication.configured === true,
+        authentication: authentication,
+        timestamp: now()
+      };
+    }
+    var status = publicCodexLogin(entry);
+    if (status.authenticated === true) {
+      bootstrapCodexHome(loginOptions, setup.codexHome, setup.mcpEndpoint);
+      status.authentication = inspectCodexAuthentication(setup.codexHome);
+    }
+    return status;
+  };
+
+  C8O.agentBridge.codexLoginStart = function (options) {
+    var loginOptions = codexLoginOptions(options);
+    var setup = detectCodexRuntimePresence(loginOptions);
+    if (!setup.codex || setup.codex.found !== true || !trim(setup.codexHome).length) {
+      return { ok: false, status: "missing", error: "Managed Codex runtime is not available.", timestamp: now() };
+    }
+    var loginBootstrap = bootstrapCodexHome(loginOptions, setup.codexHome, setup.mcpEndpoint);
+    var key = codexLoginKey(setup.codexHome);
+    var registry = codexLoginRegistry();
+    var existing = registry.get(key);
+    if (existing !== null && typeof existing !== "undefined" && processAlive(existing.process)) {
+      return publicCodexLogin(existing);
+    }
+    var authentication = verifiedCodexAuthentication(loginOptions, setup.codexHome, setup.codex.path, loginBootstrap.authenticationImported === true);
+    if (authentication.configured === true && !boolValue(options && options.forceLogin, false)) {
+      return {
+        ok: true,
+        status: "authenticated",
+        running: false,
+        authenticated: true,
+        authentication: authentication,
+        timestamp: now()
+      };
+    }
+    runCommandCaptured([setup.codex.path, "logout"], {
+      timeoutMs: 15000,
+      env: codexRuntimeEnv(loginOptions, setup.codexHome)
+    });
+    var stdoutFile = File.createTempFile("c8o-codex-login-out-", ".log");
+    var stderrFile = File.createTempFile("c8o-codex-login-err-", ".log");
+    var pb = new ProcessBuilder(toJavaList([setup.codex.path, "login"]));
+    applyEngineProxyEnvironment(pb.environment(), "https://auth.openai.com");
+    envObjectToMap(pb.environment(), codexRuntimeEnv(loginOptions, setup.codexHome));
+    pb.directory(new File(setup.workspaceRoot));
+    pb.redirectOutput(stdoutFile);
+    pb.redirectError(stderrFile);
+    var entry = {
+      process: pb.start(),
+      home: setup.codexHome,
+      stdoutFile: stdoutFile,
+      stderrFile: stderrFile,
+      startedAt: now()
+    };
+    registry.put(key, entry);
+    return publicCodexLogin(entry);
+  };
+
   C8O.agentBridge.codexSetup = function (options) {
     options = optionsWithRequestFallbacks(options || {});
+    if (boolValue(options.loginStatus || options.codexLoginStatus, false)) {
+      return C8O.agentBridge.codexLoginStatus(options);
+    }
+    if (boolValue(options.login || options.codexLogin, false)) {
+      return C8O.agentBridge.codexLoginStart(options);
+    }
     var install = boolValue(options.install || options.installCodex, false);
     var installation = {
       attempted: false,
@@ -1352,6 +1514,26 @@
       steps: []
     };
     var messages = [];
+    if (!install) {
+      var preflightSetup = detectCodexRuntimePresence(options);
+      if (preflightSetup.codex && preflightSetup.codex.found === true && trim(preflightSetup.codexHome).length) {
+        var preflightBootstrap = bootstrapCodexHome(options, preflightSetup.codexHome, preflightSetup.mcpEndpoint);
+        var preflightAuthentication = verifiedCodexAuthentication(options, preflightSetup.codexHome, preflightSetup.codex.path, preflightBootstrap.authenticationImported === true);
+        if (preflightAuthentication.configured !== true) {
+          return {
+            ok: false,
+            status: "authentication_required",
+            setup: preflightSetup,
+            authentication: preflightAuthentication,
+            installation: installation,
+            bootstrap: preflightBootstrap,
+            skills: null,
+            messages: ["Codex authentication is required. Sign in from the agent configuration."],
+            timestamp: now()
+          };
+        }
+      }
+    }
     if (install) {
       try {
         installation = ensureCodexRuntime(options);
@@ -1412,11 +1594,17 @@
     if (playwrightRequired && (!setup.playwright || setup.playwright.found !== true)) {
       messages.push("Playwright MCP is not available in the managed Codex runtime.");
     }
-    var ready = setup.codex.found && !setup.home.error.length && skills.ok === true && setup.mcp.hasConvertigo === true && (!playwrightRequired || setup.playwright.found === true);
+    var authentication = verifiedCodexAuthentication(options, setup.codexHome || setup.home.path, setup.codex.path, bootstrap.authenticationImported === true);
+    var runtimeReady = setup.codex.found && !setup.home.error.length && skills.ok === true && setup.mcp.hasConvertigo === true && (!playwrightRequired || setup.playwright.found === true);
+    var ready = runtimeReady && authentication.configured === true;
+    if (runtimeReady && !ready) {
+      messages.push("Codex authentication is required. Run codex login or configure OPENAI_API_KEY.");
+    }
     return {
       ok: ready,
-      status: ready ? "ready" : "missing",
+      status: ready ? "ready" : (runtimeReady ? "authentication_required" : "missing"),
       setup: setup,
+      authentication: authentication,
       installation: installation,
       bootstrap: bootstrap,
       skills: skills,
@@ -1521,6 +1709,7 @@
   }
 
   C8O.agentBridge.codexStart = function (options) {
+    var operationStartedAt = now();
     options = optionsWithRequestFallbacks(options || {});
     try {
       ensureManagedViewerDebugPort(options);
@@ -1565,12 +1754,18 @@
           ok: true,
           status: "already_running",
           handle: handle,
+          timings: {
+            acceptedAt: operationStartedAt,
+            appServerReused: true,
+            totalMs: now() - operationStartedAt
+          },
           state: statusOf(existing),
           timestamp: now()
         };
       }
     }
 
+    var setupStartedAt = now();
     var setup = C8O.agentBridge.codexSetup({
       workspaceRoot: options.workspaceRoot,
       installDir: options.installDir,
@@ -1614,12 +1809,14 @@
       noCodeMcpTokenHandle: options.noCodeMcpTokenHandle,
       mcpBearerTokenHandle: options.mcpBearerTokenHandle
     });
+    var setupCompletedAt = now();
     if (!setup.ok) {
+      var authenticationRequired = setup.status === "authentication_required";
       return {
         ok: false,
-        status: "error",
+        status: authenticationRequired ? "authentication_required" : "error",
         phase: "setup",
-        error: "codex CLI is required before start",
+        error: authenticationRequired ? "Codex authentication is required before start" : "codex CLI is required before start",
         setup: setup,
         timestamp: now()
       };
@@ -1687,9 +1884,13 @@
     entry.codexThreadId = entry.sessionId;
     entry.codexPath = setup.setup.codex.path || "codex";
     registry.put(handle, entry);
+    var appServerStartedAt = 0;
+    var appServerReadyAt = 0;
     if (runtimeMode !== "exec") {
       try {
+        appServerStartedAt = now();
         startCodexAppServer(entry, env, options, setup);
+        appServerReadyAt = now();
       } catch (appServerError) {
         entry.status = "error";
         entry.phase = "error";
@@ -1741,6 +1942,17 @@
       codexThreadId: entry.codexThreadId,
       codexRuntimeMode: entry.codexRuntimeMode,
       cursor: entry.nextIndex,
+      timings: {
+        acceptedAt: operationStartedAt,
+        setupStartedAt: setupStartedAt,
+        setupCompletedAt: setupCompletedAt,
+        setupMs: setupCompletedAt - setupStartedAt,
+        appServerStartedAt: appServerStartedAt,
+        appServerReadyAt: appServerReadyAt,
+        appServerStartMs: appServerStartedAt > 0 && appServerReadyAt >= appServerStartedAt ? appServerReadyAt - appServerStartedAt : 0,
+        appServerReused: false,
+        totalMs: now() - operationStartedAt
+      },
       state: statusOf(entry),
       setup: setup,
       timestamp: now()
@@ -1748,6 +1960,7 @@
   };
 
   C8O.agentBridge.codexPrompt = function (options) {
+    var promptAcceptedAt = now();
     options = optionsWithRequestFallbacks(options || {});
     var handle = resolveHandle(options.handle);
     if (!handle.length) {
@@ -1846,9 +2059,15 @@
     runtimeOptions.viewerCdpEndpoint = trim(runtimeOptions.viewerCdpEndpoint || entry.viewerCdpEndpoint || runtimeOptions.playwrightCdpEndpoint);
     runtimeOptions.playwrightMcpEndpoint = trim(runtimeOptions.playwrightMcpEndpoint || entry.playwrightMcpEndpoint);
     runtimeOptions.agentRevealMode = entry.convertigoRevealMode === true ? "true" : "false";
+    var managedBootstrapStartedAt = now();
+    var managedBootstrapCompletedAt = managedBootstrapStartedAt;
+    var managedBootstrap = null;
+    var managedPreflightCurrent = false;
     try {
       if (entry.home && trim(entry.home.path).length) {
         var bootstrap = bootstrapCodexHome(runtimeOptions, entry.home.path, resolveMcpEndpoint(runtimeOptions));
+        managedBootstrap = bootstrap;
+        managedPreflightCurrent = bootstrap && bootstrap.ok !== false;
         if (bootstrap && bootstrap.ok === false) {
           pushEvent(entry, "warning", {
             message: bootstrap.error || bootstrap.message || "Unable to refresh Codex home",
@@ -1899,6 +2118,26 @@
         provider: "codex"
       });
     }
+    managedBootstrapCompletedAt = now();
+    if (managedPreflightCurrent) {
+      promptText = withManagedGuidancePreflight(promptText, {
+        mcpEndpoint: runtimeOptions.mcpEndpoint
+      });
+    }
+    var managedPreflight = {
+      setupStatus: managedPreflightCurrent ? "current" : "unverified",
+      guidanceVersion: MCP_GUIDANCE_VERSION,
+      mcpEndpoint: trim(runtimeOptions.mcpEndpoint),
+      configStatus: managedBootstrap && managedBootstrap.generated && managedBootstrap.generated.indexOf("config.toml") >= 0
+        ? "updated"
+        : (managedPreflightCurrent ? "unchanged" : "unverified"),
+      timings: {
+        acceptedAt: promptAcceptedAt,
+        bootstrapStartedAt: managedBootstrapStartedAt,
+        bootstrapCompletedAt: managedBootstrapCompletedAt,
+        bootstrapMs: managedBootstrapCompletedAt - managedBootstrapStartedAt
+      }
+    };
     if (entry.protocol === "codex-app-server") {
       var appServerRequestId = entry.nextRequestId;
       var appServerCursor = entry.nextIndex;
@@ -1934,6 +2173,13 @@
           handle: handle,
           requestId: turnPending.id,
           cursor: appServerCursor,
+          preflight: managedPreflight,
+          timings: {
+            acceptedAt: promptAcceptedAt,
+            preflightMs: managedBootstrapCompletedAt - managedBootstrapStartedAt,
+            submittedAt: now(),
+            totalMs: now() - promptAcceptedAt
+          },
           state: statusOf(entry),
           timestamp: now()
         };
@@ -1998,6 +2244,13 @@
         handle: handle,
         requestId: requestId,
         cursor: cursor,
+        preflight: managedPreflight,
+        timings: {
+          acceptedAt: promptAcceptedAt,
+          preflightMs: managedBootstrapCompletedAt - managedBootstrapStartedAt,
+          submittedAt: now(),
+          totalMs: now() - promptAcceptedAt
+        },
         state: statusOf(entry),
         timestamp: now()
       };
