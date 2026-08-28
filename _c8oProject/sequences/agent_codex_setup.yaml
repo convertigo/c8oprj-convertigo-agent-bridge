@@ -129,11 +129,11 @@ responseTimeout: 900
   description: When true, reinstall Codex even when an executable is already found.
   schemaType: xsd:boolean
 ↓mcpSkillsSourceDir [variables.RequestableVariable-1781791540272]: 
-  comment: Optional ConvertigoMCP project directory used to synchronize base agent skills.
-  description: Optional ConvertigoMCP project directory used to synchronize base agent skills.
+  comment: Optional lib_ConvertigoMCP project directory used to synchronize base agent skills.
+  description: Optional lib_ConvertigoMCP project directory used to synchronize base agent skills.
 ↓skipSkillsInstall [variables.RequestableVariable-1781791540274]: 
-  comment: When true, skips synchronization of the ConvertigoMCP skill pack into the agent home.
-  description: When true, skips synchronization of the ConvertigoMCP skill pack into the agent home.
+  comment: When true, skips synchronization of the lib_ConvertigoMCP skill pack into the agent home.
+  description: When true, skips synchronization of the lib_ConvertigoMCP skill pack into the agent home.
   schemaType: xsd:boolean
 ↓agentProfile [variables.RequestableVariable-1782509100003]: 
   comment: Agent profile used to select the managed skill pack, for example flow, nocode or generalist.

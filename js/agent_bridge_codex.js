@@ -721,7 +721,7 @@
           }
         }
       }
-    }), "ConvertigoAgentBridge-codex-session-" + entry.handle);
+    }), "lib_ConvertigoAgentBridge-codex-session-" + entry.handle);
     thread.setDaemon(true);
     thread.start();
     entry.codexSessionWatcherThread = thread;
@@ -882,7 +882,7 @@
     entry.phase = "initialize";
     entry.init = codexAppServerRequest(entry, "initialize", {
       clientInfo: {
-        name: "ConvertigoAgentBridge",
+        name: "lib_ConvertigoAgentBridge",
         version: "0.1.0"
       },
       capabilities: null
@@ -1340,7 +1340,7 @@
     });
   }
 
-  var CODEX_LOGIN_REGISTRY_KEY = "ConvertigoAgentBridge.codexLoginRegistry.v1";
+  var CODEX_LOGIN_REGISTRY_KEY = "lib_ConvertigoAgentBridge.codexLoginRegistry.v1";
 
   function codexLoginRegistry() {
     var store = getServerStore();

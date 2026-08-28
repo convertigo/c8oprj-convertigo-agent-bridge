@@ -331,7 +331,7 @@
       entry.init = acpRequest(entry, "initialize", {
         protocolVersion: 1,
         clientInfo: {
-          name: "ConvertigoAgentBridge",
+          name: "lib_ConvertigoAgentBridge",
           version: "0.1.0"
         },
         clientCapabilities: {

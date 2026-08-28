@@ -111,7 +111,7 @@ same context.
   possible. Local hotfix Studio commonly uses
   `http://localhost:18082/convertigo/api/mcp`; standard Studio/server ports may
   differ.
-- Validate Codex setup with `ConvertigoAgentBridge.agent_codex_setup` before
+- Validate Codex setup with `lib_ConvertigoAgentBridge.agent_codex_setup` before
   debugging Assistant UI symptoms.
 - Codex runs in resident app-server mode by default:
   `codex app-server --listen stdio://`. `agent_codex_start` must stay
