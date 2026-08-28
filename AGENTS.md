@@ -121,7 +121,7 @@ same context.
   logs, or conversation records.
 - Experimental Flow support stays on the private `codex/flow-agent-profile`
   branch. The Studio user has one Codex home containing both the Legacy and
-  Flow MCP servers. `ConvertigoMCP._setupCodex` owns the Legacy skill pack and
+  Flow MCP servers. `lib_ConvertigoMCP._setupCodex` owns the Legacy skill pack and
   `lib_flow_mcp._setupCodex` owns the Flow pack; AgentBridge adds only the small
   routing skill. Legacy/Flow profiles are routing hints and conversation
   metadata, never home or history boundaries.
@@ -133,7 +133,7 @@ same context.
   possible. Local hotfix Studio commonly uses
   `http://localhost:18082/convertigo/api/mcp`; standard Studio/server ports may
   differ.
-- Validate Codex setup with `ConvertigoAgentBridge.agent_codex_setup` before
+- Validate Codex setup with `lib_ConvertigoAgentBridge.agent_codex_setup` before
   debugging Assistant UI symptoms.
 - Codex runs in resident app-server mode by default:
   `codex app-server --listen stdio://`. `agent_codex_start` must stay

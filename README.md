@@ -5,15 +5,15 @@ Studio.
 
 L'objectif est d'exposer a l'assistant une interface HTTP/polling simple, sans
 WebSocket, capable de piloter un agent CLI persistant comme `vibe-acp`. Le
-projet `ConvertigoMCP` reste le serveur MCP appele par l'agent, mais il ne porte
+projet `lib_ConvertigoMCP` reste le serveur MCP appele par l'agent, mais il ne porte
 pas le wrapper d'agent.
 
 ## Etat iteration 1
 
-Le projet `ConvertigoAgentBridge` est un projet Convertigo autonome place dans :
+Le projet `lib_ConvertigoAgentBridge` est un projet Convertigo autonome place dans :
 
 ```text
-/Users/nicolas/git/c8oprj-convertigo-agent-bridge
+/Users/nicolas/git/c8oprj-lib-convertigo-agent-bridge
 ```
 
 Il expose les sequences publiques suivantes :
@@ -74,7 +74,7 @@ Pour les exemples :
 
 ```text
 BASE_URL=http://localhost:18080/convertigo
-BRIDGE_URL=$BASE_URL/projects/ConvertigoAgentBridge/.json
+BRIDGE_URL=$BASE_URL/projects/lib_ConvertigoAgentBridge/.json
 ```
 
 Exemple de check runtime :

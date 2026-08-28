@@ -1,7 +1,7 @@
 # Bridge Contract
 
 Le contrat initial est expose par le projet Convertigo dedie
-`ConvertigoAgentBridge`. `ConvertigoMCP` reste uniquement le serveur MCP que
+`lib_ConvertigoAgentBridge`. `lib_ConvertigoMCP` reste uniquement le serveur MCP que
 l'agent peut appeler sur :
 
 ```text
@@ -16,7 +16,7 @@ HTTP classique. Le stream est un long-poll avec curseur, sans WebSocket.
 Dans l'etat actuel, les appels directs ajoutent `__connector=void` :
 
 ```text
-http://localhost:18082/convertigo/projects/ConvertigoAgentBridge/.json?__connector=void&__sequence=<sequence>
+http://localhost:18082/convertigo/projects/lib_ConvertigoAgentBridge/.json?__connector=void&__sequence=<sequence>
 ```
 
 Ce connecteur ne sert qu'a satisfaire la resolution HTTP du moteur Convertigo.

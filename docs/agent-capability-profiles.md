@@ -24,7 +24,7 @@ strictly NoCode.
 The `studio` user has one Codex home and one conversation history. Its setup
 installs both capability packs:
 
-- Legacy: `convertigo`, owned by `ConvertigoMCP`, with
+- Legacy: `convertigo`, owned by `lib_ConvertigoMCP`, with
   `convertigo-generalist`.
 - Flow: `convertigo-flow`, owned by `lib_flow_mcp`, with the Flow orchestrator,
   backend specialist, and Svelte specialist skills.
@@ -60,19 +60,19 @@ low-code agent cannot accidentally mutate a NoCode application.
 
 ## Ownership
 
-`ConvertigoAgentBridge` owns provider lifecycle, isolated homes, sessions,
+`lib_ConvertigoAgentBridge` owns provider lifecycle, isolated homes, sessions,
 cancellation, event transport, secrets, Playwright/CDP wiring, unified Studio
 setup, and generic capability descriptors. It must not know individual Flow MCP
 tool names.
 
-`ConvertigoAssistant` owns the user conversation and surface context. It keeps a
+`lib_ConvertigoAssistant` owns the user conversation and surface context. It keeps a
 single Studio history and asks the bridge for authoritative settings. Its prompt
 routes through `convertigo-studio`; it does not expose a hidden Legacy/Flow mode
 to the user.
 
 Capability projects own their knowledge and installation:
 
-- `ConvertigoMCP._setupCodex` installs Legacy and NoCode packs.
+- `lib_ConvertigoMCP._setupCodex` installs Legacy and NoCode packs.
 - `lib_flow_mcp._setupCodex` installs the Flow MCP configuration and skills.
 
 Missing required Flow setup is a configuration error. AgentBridge must not

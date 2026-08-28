@@ -1,12 +1,12 @@
 // Common runtime, process registry, event buffer and shared helpers.
 // Loaded by vibe_agent_bridge.js inside one Rhino scope.
-  var REGISTRY_KEY = "ConvertigoAgentBridge.agentProcessRegistry.v1";
-  var SESSION_HANDLE_ATTR = "ConvertigoAgentBridge.currentHandle";
-  var SESSION_CONVERSATION_ATTR = "ConvertigoAgentBridge.currentConversationId";
+  var REGISTRY_KEY = "lib_ConvertigoAgentBridge.agentProcessRegistry.v1";
+  var SESSION_HANDLE_ATTR = "lib_ConvertigoAgentBridge.currentHandle";
+  var SESSION_CONVERSATION_ATTR = "lib_ConvertigoAgentBridge.currentConversationId";
   var FALLBACK_MCP_PATH = "/api/mcp";
   var FALLBACK_FLOW_MCP_PATH = "/api/flow-mcp";
   var DEFAULT_TTL_SECONDS = 3600;
-  var RUNTIME_UPDATE_CACHE_KEY = "ConvertigoAgentBridge.runtimeUpdateCache.v1";
+  var RUNTIME_UPDATE_CACHE_KEY = "lib_ConvertigoAgentBridge.runtimeUpdateCache.v1";
   var RUNTIME_UPDATE_CACHE_FILE = "runtime-update-checks.json";
   var DEFAULT_RUNTIME_UPDATE_CACHE_MS = 21600000;
   var STORAGE_CLEANUP_FILE = "storage-cleanup.json";
@@ -16,7 +16,7 @@
   var MAX_EVENT_LIMIT = 500;
   var MAX_EVENT_BUFFER = 5000;
   var NOCODE_MCP_TOKEN_ENV = "C8O_NOCODE_MCP_TOKEN";
-  var MCP_GUIDANCE_VERSION = "2026-07-30.conversation-bootstrap-v4";
+  var MCP_GUIDANCE_VERSION = "2026-08-28.batch-reveal-v2";
   var STUDIO_ROUTER_SKILL_SLUG = "convertigo-studio";
   var AGENT_CAPABILITY_PROFILES = {
     generalist: {
@@ -28,7 +28,7 @@
       supportedProviders: ["codex", "vibe"],
       mcpPath: FALLBACK_MCP_PATH,
       mcpServerName: "convertigo",
-      setupProject: "ConvertigoMCP",
+      setupProject: "lib_ConvertigoMCP",
       setupSkillKey: "generalist",
       skillSlug: "convertigo-generalist",
       specialistSkillSlugs: [],
@@ -43,7 +43,7 @@
       supportedProviders: ["codex", "vibe"],
       mcpPath: FALLBACK_MCP_PATH,
       mcpServerName: "convertigo",
-      setupProject: "ConvertigoMCP",
+      setupProject: "lib_ConvertigoMCP",
       setupSkillKey: "nocode",
       skillSlug: "convertigo-nocode",
       specialistSkillSlugs: [],
@@ -236,6 +236,7 @@
       "For Flow frontend source authoring, pass `reveal:true` to `code-set` or `code-patch`; Studio will refresh the virtual tree and expand the affected source even when the project was collapsed.",
       "After the first Flow frontend `code-get` of the turn, call `frontend-svelte-action` with `actionId:\"dev.ensure\", wait:false` before mutating; this recovers Vite after a Studio restart without restarting an active viewer.",
       "Before using Playwright with a Flow frontend, call `frontend-svelte-action` with `actionId:\"dev.open\"` and continue only when it reports `browserControlReady:true`.",
+      "When grouping mutations with `batch-call`, pass top-level `reveal:true`; the batch will reveal the final touched object after its deferred refresh.",
       "For `mobile-builder-open`, use `wait:false` for reveal/focus polls; reserve long `wait:true` calls for readiness proof and omit `reveal` unless the user specifically needs UI focus.",
       "Do not pass `reveal:true` on read-only calls. Treat skipped, unsupported, or intent reveal results as UI hints, not mutation failures.",
       "",
@@ -266,7 +267,7 @@
     return lines.join("\n");
   }
 
-  function managedMcpTransportEndpoint(endpoint) {
+  function mcpTransportEndpoint(endpoint, jsonOnly) {
     var text = trim(endpoint);
     var fragment = "";
     var hash = text.indexOf("#");
@@ -275,11 +276,43 @@
       text = text.substring(0, hash);
     }
     if (/(^|[?&])jsonOnly=[^&]*/i.test(text)) {
-      text = text.replace(/(^|[?&])jsonOnly=[^&]*/i, "$1jsonOnly=true");
+      text = text.replace(/(^|[?&])jsonOnly=[^&]*/i, "$1jsonOnly=" + (jsonOnly ? "true" : "false"));
     } else {
-      text += (text.indexOf("?") >= 0 ? "&" : "?") + "jsonOnly=true";
+      text += (text.indexOf("?") >= 0 ? "&" : "?") + "jsonOnly=" + (jsonOnly ? "true" : "false");
     }
     return text + fragment;
+  }
+
+  function managedMcpTransportEndpoint(endpoint) {
+    return mcpTransportEndpoint(endpoint, true);
+  }
+
+  function endpointQueryParameter(endpoint, name, value) {
+    var text = trim(endpoint);
+    var fragment = "";
+    var hash = text.indexOf("#");
+    if (hash >= 0) {
+      fragment = text.substring(hash);
+      text = text.substring(0, hash);
+    }
+    var encodedName = String(name || "");
+    var encodedValue = encodeURIComponent(String(value || ""));
+    var pattern = new RegExp("(^|[?&])" + encodedName + "=[^&]*", "i");
+    if (pattern.test(text)) {
+      text = text.replace(pattern, "$1" + encodedName + "=" + encodedValue);
+    } else {
+      text += (text.indexOf("?") >= 0 ? "&" : "?") + encodedName + "=" + encodedValue;
+    }
+    return text + fragment;
+  }
+
+  function vibeMcpTransportEndpoint(endpoint) {
+    // Vibe's MCP client requires standard text content alongside structuredContent.
+    return endpointQueryParameter(
+      mcpTransportEndpoint(endpoint, false),
+      "descriptorVersion",
+      MCP_GUIDANCE_VERSION
+    );
   }
 
   function intValue(value, defaultValue, minValue, maxValue) {
@@ -905,7 +938,7 @@
       }
       var skillInfo = skillKey.length && result.skills && result.skills[skillKey] ? result.skills[skillKey] : null;
       if (capabilityProfile.id === "nocode" && skillInfo === null) {
-        throw new Error("ConvertigoMCP._setupCodex did not return convertigo-nocode skill details");
+        throw new Error("lib_ConvertigoMCP._setupCodex did not return convertigo-nocode skill details");
       }
       var skillPaths = result.skillPaths && typeof result.skillPaths === "object" ? result.skillPaths : {};
       report.ok = true;
@@ -967,13 +1000,13 @@
     if (explicit.length) {
       return new File(explicit);
     }
-    var projectDir = projectDirectoryByName("ConvertigoMCP");
+    var projectDir = projectDirectoryByName("lib_ConvertigoMCP");
     if (projectDir !== null) {
       return projectDir;
     }
     var home = String(System.getProperty("user.home"));
     var candidates = [
-      new File(home, "git/c8oprj-c8o-mcp"),
+      new File(home, "git/c8oprj-lib-c8o-mcp"),
       new File(home, "git/c8oprj-convertigo-mcp")
     ];
     for (var i = 0; i < candidates.length; i++) {
@@ -1046,7 +1079,7 @@
       candidates.push(new File(new File(new File(sourceRoot, "resources"), "convertigo-nocode"), "SKILL.md"));
     }
     var home = String(System.getProperty("user.home"));
-    candidates.push(new File(home, "git/c8oprj-c8o-mcp/resources/convertigo-nocode/SKILL.md"));
+    candidates.push(new File(home, "git/c8oprj-lib-c8o-mcp/resources/convertigo-nocode/SKILL.md"));
     candidates.push(new File(home, "git/c8oprj-convertigo-mcp/resources/convertigo-nocode/SKILL.md"));
     for (var i = 0; i < candidates.length; i++) {
       var file = candidates[i];
@@ -1278,6 +1311,7 @@
       isFlow ? "- If Playwright is unavailable, disabled, still on `about:blank`, or attached to another endpoint, report the host configuration problem instead of bypassing it." : "- If `mobile-builder-open` reports `browserControlReady:true` but the Playwright/browser-control MCP tools are unavailable, disabled, still on `about:blank`, or attached to another endpoint, report the configuration problem to the user instead of bypassing it with Node scripts, raw CDP WebSocket code, or a new browser.",
       "- If a prompt says Convertigo runtime reveal mode is enabled, pass `reveal:true` only on supported Convertigo mutation/viewer tools that should visibly move Studio or No Code Studio; do not add it to read-only calls.",
       isFlow ? "- Keep viewer starts and synchronization asynchronous until the final acceptance proof." : "- For `mobile-builder-open`, use `wait:false` for reveal/focus polls; reserve long `wait:true` calls for readiness proof and omit `reveal` unless the user specifically needs UI focus.",
+      "- If those mutations are grouped with `batch-call`, pass top-level `reveal:true`; the batch reveals the final touched object after its deferred refresh.",
       isNoCode ? "- You are in the C8Oforms / No-Code Studio surface, not in Eclipse Studio. A selected Convertigo project is optional in this surface." : "- Work on the selected project unless the user explicitly asks for another project.",
       isNoCode ? "" : "- If no project is selected and the user explicitly asks to create a new project or application, derive a concise valid technical name when needed, check for collisions through Convertigo MCP, and proceed without asking for a project selection.",
       isNoCode ? "- Discover forms, applications, pages, data sources, roles, publication state, and permissions through the NoCode/C8Oforms MCP context before falling back to generic Studio project inspection." : "",
@@ -1286,6 +1320,7 @@
       isNoCode ? "- If no no-code form/application is selected, answer from the C8Oforms workspace or ask which form/application to target; do not assume an unrelated Studio project." : "",
       isFlow ? "- Never use curl, handwritten JSON-RPC, filesystem mutation, or another MCP surface as a fallback. A missing managed Flow capability is a host configuration defect." : "",
       "- Prefer Convertigo objects and MCP operations. Do not edit generated folders such as `_private/ionic`, `_private/svelte`, `DisplayObjects`, `dist`, or build outputs.",
+      "- Convertigo project descriptors are MCP-owned: never read or edit `c8oProject.yaml`, `_c8oProject/**/*.yaml`, or `project.xml` to implement a project change. If a required Convertigo MCP call still fails after one targeted retry, stop and report the MCP error without changing project files.",
       "- Reply to the user in their language. Keep progress updates short and factual, and never expose hidden reasoning.",
       "- When you change a project, validate the result with the available Convertigo tools before claiming completion.",
       isNoCode ? "- Keep the user-facing vocabulary no-code oriented: forms, applications, pages, fields, data sources, roles, publication, and permissions." : "",
@@ -2026,6 +2061,7 @@
       "",
       "## MCP-only boundary",
       "",
+      "- Convertigo project descriptors are MCP-owned. Never read or edit `c8oProject.yaml`, `_c8oProject/**/*.yaml`, or `project.xml` as an authoring fallback. If a required MCP operation still fails after one targeted retry, stop and report the blocker without mutating project files.",
       "- Never edit or repair `_private/ionic`, `DisplayObjects`, `dist`, or other generated artifacts.",
       "- Generated artifacts are diagnostic-only surfaces. Fix the Convertigo source objects or the MCP generator instead.",
       "- Do not run `npm run build` or other manual frontend builds outside MCP to close a task.",
@@ -2042,7 +2078,7 @@
       "## Local MCP endpoint",
       "",
       "- Expected local MCP entry: `" + trim(mcpEndpoint) + "`",
-      "- If Codex is not yet configured for Convertigo, run the local Studio sequence `_setupCodex` from the ConvertigoMCP project.",
+      "- If Codex is not yet configured for Convertigo, run the local Studio sequence `_setupCodex` from the lib_ConvertigoMCP project.",
       ""
     ]).join("\n");
   }
@@ -2431,7 +2467,7 @@
       if (!isMcpSkillSource(source)) {
         report.ok = false;
         report.skipped = true;
-        report.message = "ConvertigoMCP skill source not found";
+        report.message = "lib_ConvertigoMCP skill source not found";
         return report;
       }
       var homeDir = new File(home);
@@ -2472,7 +2508,7 @@
     var text = configFile.exists() ? readTextFile(configFile) : "";
     if (!text.length) {
       text = [
-        "# Generated by ConvertigoAgentBridge.",
+        "# Generated by lib_ConvertigoAgentBridge.",
         'preferred_auth_method = "chat"',
         ""
       ].join("\n");
@@ -2910,7 +2946,7 @@
         writer.newLine();
         writer.flush();
       };
-      send({ id: 1, method: "initialize", params: { clientInfo: { name: "ConvertigoAgentBridge", version: "0.1.0" }, capabilities: null } });
+      send({ id: 1, method: "initialize", params: { clientInfo: { name: "lib_ConvertigoAgentBridge", version: "0.1.0" }, capabilities: null } });
       var initialized = false;
       var deadline = now() + intValue(options && options.codexAuthCheckTimeoutMs, 20000, 3000, 60000);
       while (now() < deadline && processAlive(process)) {
@@ -3269,7 +3305,7 @@
     try {
       if (context && context.project && context.project.getName) {
         var contextProject = String(context.project.getName());
-        if (!/^(ConvertigoAgentBridge|ConvertigoAssistant|ConvertigoMCP)$/.test(contextProject)) {
+        if (!/^(lib_ConvertigoAgentBridge|lib_ConvertigoAssistant|lib_ConvertigoMCP)$/.test(contextProject)) {
           return contextProject;
         }
       }
@@ -4131,7 +4167,7 @@
       var maxRedirects = 8;
       while (true) {
         var get = new Packages.org.apache.http.client.methods.HttpGet(currentUrl);
-        get.setHeader("User-Agent", "ConvertigoAgentBridge");
+        get.setHeader("User-Agent", "lib_ConvertigoAgentBridge");
         get.setHeader("Accept", "application/octet-stream");
         var requestConfig = Packages.org.apache.http.client.config.RequestConfig.custom().setRedirectsEnabled(false);
         configureHttpRequestProxy(get, requestConfig, currentUrl);
@@ -5192,7 +5228,7 @@
     var configFile = new File(configDir, "config.toml");
     var spec = vibeModelSpec(model);
     var text = [
-      '# Generated by ConvertigoAgentBridge.',
+      '# Generated by lib_ConvertigoAgentBridge.',
       'active_model = "' + tomlString(spec.activeModel) + '"',
       'api_timeout = 720.0',
       'auto_compact_threshold = 200000',
@@ -5224,7 +5260,7 @@
       '[[mcp_servers]]',
       'name = "Convertigo"',
       'transport = "http"',
-      'url = "' + tomlString(managedMcpTransportEndpoint(mcpEndpoint)) + '"',
+      'url = "' + tomlString(vibeMcpTransportEndpoint(mcpEndpoint)) + '"',
       'startup_timeout_sec = 60.0',
       ''
     ].join("\n");
@@ -7354,7 +7390,7 @@
           }
         }
       }
-    }), "ConvertigoAgentBridge-" + streamName + "-" + entry.handle);
+    }), "lib_ConvertigoAgentBridge-" + streamName + "-" + entry.handle);
     thread.setDaemon(true);
     thread.start();
     return thread;
@@ -7422,7 +7458,7 @@
     return [{
       type: "http",
       name: "Convertigo",
-      url: managedMcpTransportEndpoint(mcpEndpoint),
+      url: vibeMcpTransportEndpoint(mcpEndpoint),
       headers: []
     }];
   }

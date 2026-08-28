@@ -1,10 +1,10 @@
 ↑convertigo: 8.0.0.m006
-↓ConvertigoAgentBridge [core.Project]: 
+↓lib_ConvertigoAgentBridge [core.Project]: 
   comment: Local bridge between Convertigo Studio assistants and long-running AI agent CLIs
   contextTimeout: 59
   corsOrigin: =Origin
   httpSessionTimeout: 600
-  version: 0.2.16
+  version: 0.3.0
   ↓void [connectors.SqlConnector]: 🗏 connectors/void.yaml
   ↓agent_cleanup_storage [sequences.GenericSequence]: 🗏 sequences/agent_cleanup_storage.yaml
   ↓agent_codex_close [sequences.GenericSequence]: 🗏 sequences/agent_codex_close.yaml
