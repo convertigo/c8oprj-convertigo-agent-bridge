@@ -112,12 +112,21 @@ assert.match(commonSource, /already used successfully in the current conversatio
 assert.match(commonSource, /Common NGX contracts that do not require palette discovery/);
 assert.match(commonSource, /optimizeMutations:true/);
 assert.match(commonSource, /Do not inspect `ALL_TOOLS`/);
+assert.match(commonSource, /Convertigo project descriptors are MCP-owned/);
+
+const revealPrompt = withRevealModePrompt("User message", true);
+assert.match(revealPrompt, /batch-call`, pass top-level `reveal:true`/);
+assert.equal(
+  withRevealModePrompt(revealPrompt, true).split("Convertigo runtime reveal mode is enabled").length,
+  2,
+  "reveal guidance must be idempotent"
+);
 
 const managedPreflightPrompt = withManagedGuidancePreflight("User message", {
   mcpEndpoint: "http://localhost:18082/convertigo/api/mcp"
 });
 assert.match(managedPreflightPrompt, /Scoped agent setup status: current/);
-assert.match(managedPreflightPrompt, /2026-07-30\.conversation-bootstrap-v4/);
+assert.match(managedPreflightPrompt, /2026-08-28\.batch-reveal-v2/);
 assert.match(managedPreflightPrompt, /Do not call `_setupCodex`/);
 assert.equal(
   withManagedGuidancePreflight(managedPreflightPrompt, {}).split("Convertigo managed preflight for this turn").length,
@@ -133,6 +142,10 @@ assert.equal(
   managedMcpTransportEndpoint("http://localhost:18082/convertigo/api/mcp?transport=managed&jsonOnly=false#viewer"),
   "http://localhost:18082/convertigo/api/mcp?transport=managed&jsonOnly=true#viewer"
 );
+assert.equal(
+  vibeMcpTransportEndpoint("http://localhost:18082/convertigo/api/mcp?transport=managed&jsonOnly=true#viewer"),
+  "http://localhost:18082/convertigo/api/mcp?transport=managed&jsonOnly=false&descriptorVersion=2026-08-28.batch-reveal-v2#viewer"
+);
 const compactCodexConfig = patchCodexMcpConfigText(
   "",
   "http://localhost:18082/convertigo/api/mcp",
@@ -142,7 +155,7 @@ const compactCodexConfig = patchCodexMcpConfigText(
 assert.match(compactCodexConfig.text, /url = "http:\/\/localhost:18082\/convertigo\/api\/mcp\?jsonOnly=true"/);
 assert.equal(
   buildMcpServers("http://localhost:18082/convertigo/api/mcp")[0].url,
-  "http://localhost:18082/convertigo/api/mcp?jsonOnly=true"
+  "http://localhost:18082/convertigo/api/mcp?jsonOnly=false&descriptorVersion=2026-08-28.batch-reveal-v2"
 );
 
 const pythonSpec = pythonRuntimeSpec({

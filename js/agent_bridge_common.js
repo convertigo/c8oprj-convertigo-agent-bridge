@@ -15,7 +15,7 @@
   var MAX_EVENT_LIMIT = 500;
   var MAX_EVENT_BUFFER = 5000;
   var NOCODE_MCP_TOKEN_ENV = "C8O_NOCODE_MCP_TOKEN";
-  var MCP_GUIDANCE_VERSION = "2026-07-30.conversation-bootstrap-v4";
+  var MCP_GUIDANCE_VERSION = "2026-08-28.batch-reveal-v2";
 
   var File = Packages.java.io.File;
   var FileOutputStream = Packages.java.io.FileOutputStream;
@@ -184,6 +184,7 @@
     return [
       marker + ".",
       "When calling supported Convertigo MCP mutation/viewer tools that should visibly move Studio or No Code Studio, pass `reveal:true`: `databaseobject-tree-apply`, `mobile-builder-open`, `nocode-form-create`, `nocode-form-edit`, and `nocode-form-update`.",
+      "When grouping mutations with `batch-call`, pass top-level `reveal:true`; the batch will reveal the final touched object after its deferred refresh.",
       "For `mobile-builder-open`, use `wait:false` for reveal/focus polls; reserve long `wait:true` calls for readiness proof and omit `reveal` unless the user specifically needs UI focus.",
       "Do not pass `reveal:true` on read-only calls. Treat skipped, unsupported, or intent reveal results as UI hints, not mutation failures.",
       "",
@@ -214,7 +215,7 @@
     return lines.join("\n");
   }
 
-  function managedMcpTransportEndpoint(endpoint) {
+  function mcpTransportEndpoint(endpoint, jsonOnly) {
     var text = trim(endpoint);
     var fragment = "";
     var hash = text.indexOf("#");
@@ -223,11 +224,43 @@
       text = text.substring(0, hash);
     }
     if (/(^|[?&])jsonOnly=[^&]*/i.test(text)) {
-      text = text.replace(/(^|[?&])jsonOnly=[^&]*/i, "$1jsonOnly=true");
+      text = text.replace(/(^|[?&])jsonOnly=[^&]*/i, "$1jsonOnly=" + (jsonOnly ? "true" : "false"));
     } else {
-      text += (text.indexOf("?") >= 0 ? "&" : "?") + "jsonOnly=true";
+      text += (text.indexOf("?") >= 0 ? "&" : "?") + "jsonOnly=" + (jsonOnly ? "true" : "false");
     }
     return text + fragment;
+  }
+
+  function managedMcpTransportEndpoint(endpoint) {
+    return mcpTransportEndpoint(endpoint, true);
+  }
+
+  function endpointQueryParameter(endpoint, name, value) {
+    var text = trim(endpoint);
+    var fragment = "";
+    var hash = text.indexOf("#");
+    if (hash >= 0) {
+      fragment = text.substring(hash);
+      text = text.substring(0, hash);
+    }
+    var encodedName = String(name || "");
+    var encodedValue = encodeURIComponent(String(value || ""));
+    var pattern = new RegExp("(^|[?&])" + encodedName + "=[^&]*", "i");
+    if (pattern.test(text)) {
+      text = text.replace(pattern, "$1" + encodedName + "=" + encodedValue);
+    } else {
+      text += (text.indexOf("?") >= 0 ? "&" : "?") + encodedName + "=" + encodedValue;
+    }
+    return text + fragment;
+  }
+
+  function vibeMcpTransportEndpoint(endpoint) {
+    // Vibe's MCP client requires standard text content alongside structuredContent.
+    return endpointQueryParameter(
+      mcpTransportEndpoint(endpoint, false),
+      "descriptorVersion",
+      MCP_GUIDANCE_VERSION
+    );
   }
 
   function intValue(value, defaultValue, minValue, maxValue) {
@@ -1023,6 +1056,7 @@
       "- If the browser target is `about:blank` while builder status is `building`, poll `mobile-builder-open(stateOnly=true, wait=true)` before Playwright. If status is `stopped`, launch asynchronously instead.",
       "- If `mobile-builder-open` reports `browserControlReady:true` but the Playwright/browser-control MCP tools are unavailable, disabled, still on `about:blank`, or attached to another endpoint, report the configuration problem to the user instead of bypassing it with Node scripts, raw CDP WebSocket code, or a new browser.",
       "- If a prompt says Convertigo runtime reveal mode is enabled, pass `reveal:true` only on supported Convertigo mutation/viewer tools that should visibly move Studio or No Code Studio; do not add it to read-only calls.",
+      "- If those mutations are grouped with `batch-call`, pass top-level `reveal:true`; the batch reveals the final touched object after its deferred refresh.",
       "- For `mobile-builder-open`, use `wait:false` for reveal/focus polls; reserve long `wait:true` calls for readiness proof and omit `reveal` unless the user specifically needs UI focus.",
       isNoCode ? "- You are in the C8Oforms / No-Code Studio surface, not in Eclipse Studio. A selected Convertigo project is optional in this surface." : "- Work on the selected project unless the user explicitly asks for another project.",
       isNoCode ? "" : "- If no project is selected and the user explicitly asks to create a new project or application, derive a concise valid technical name when needed, check for collisions through Convertigo MCP, and proceed without asking for a project selection.",
@@ -1031,6 +1065,7 @@
       isNoCode ? "- If a first tool discovery attempt does not show `nocode-form-*` tools, retry with exact searches for `Convertigo NoCode form contract get edit update validate compile C8Oforms`, `nocode-form-contract-get nocode-form-edit nocode-form-update`, and `mcp__convertigo nocode_form_contract_get nocode_form_edit nocode_form_update` before reporting a blocker." : "",
       isNoCode ? "- If no no-code form/application is selected, answer from the C8Oforms workspace or ask which form/application to target; do not assume an unrelated Studio project." : "",
       "- Prefer Convertigo objects and MCP operations. Do not edit generated folders such as `_private/ionic`, `DisplayObjects`, `dist`, or build outputs.",
+      "- Convertigo project descriptors are MCP-owned: never read or edit `c8oProject.yaml`, `_c8oProject/**/*.yaml`, or `project.xml` to implement a project change. If a required Convertigo MCP call still fails after one targeted retry, stop and report the MCP error without changing project files.",
       "- Reply to the user in their language. Keep progress updates short and factual, and never expose hidden reasoning.",
       "- When you change a project, validate the result with the available Convertigo tools before claiming completion.",
       isNoCode ? "- Keep the user-facing vocabulary no-code oriented: forms, applications, pages, fields, data sources, roles, publication, and permissions." : "",
@@ -1769,6 +1804,7 @@
       "",
       "## MCP-only boundary",
       "",
+      "- Convertigo project descriptors are MCP-owned. Never read or edit `c8oProject.yaml`, `_c8oProject/**/*.yaml`, or `project.xml` as an authoring fallback. If a required MCP operation still fails after one targeted retry, stop and report the blocker without mutating project files.",
       "- Never edit or repair `_private/ionic`, `DisplayObjects`, `dist`, or other generated artifacts.",
       "- Generated artifacts are diagnostic-only surfaces. Fix the Convertigo source objects or the MCP generator instead.",
       "- Do not run `npm run build` or other manual frontend builds outside MCP to close a task.",
@@ -4754,7 +4790,7 @@
       '[[mcp_servers]]',
       'name = "Convertigo"',
       'transport = "http"',
-      'url = "' + tomlString(managedMcpTransportEndpoint(mcpEndpoint)) + '"',
+      'url = "' + tomlString(vibeMcpTransportEndpoint(mcpEndpoint)) + '"',
       'startup_timeout_sec = 60.0',
       ''
     ].join("\n");
@@ -6915,7 +6951,7 @@
     return [{
       type: "http",
       name: "Convertigo",
-      url: managedMcpTransportEndpoint(mcpEndpoint),
+      url: vibeMcpTransportEndpoint(mcpEndpoint),
       headers: []
     }];
   }

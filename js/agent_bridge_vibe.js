@@ -37,7 +37,7 @@
         throw new Error(setup.home.error);
       }
       if (configure) {
-        if (setup.config.selected.valid && trim(setup.config.selected.endpoint) === managedMcpTransportEndpoint(setup.mcpEndpoint)) {
+        if (setup.config.selected.valid && trim(setup.config.selected.endpoint) === vibeMcpTransportEndpoint(setup.mcpEndpoint)) {
           messages.push("Local VIBE_HOME config reused: " + setup.config.selected.path);
         } else {
           var written = writeLocalVibeConfig(setup.vibeHome, setup.mcpEndpoint, options.model || options.agentModel);
