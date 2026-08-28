@@ -233,6 +233,8 @@
     return [
       marker + ".",
       "When calling supported Convertigo MCP mutation/viewer tools that should visibly move Studio or No Code Studio, pass `reveal:true`: `databaseobject-tree-apply`, `mobile-builder-open`, `nocode-form-create`, `nocode-form-edit`, and `nocode-form-update`.",
+      "For Flow frontend source authoring, pass `reveal:true` to `code-set` or `code-patch`; Studio will refresh the virtual tree and expand the affected source even when the project was collapsed.",
+      "Before using Playwright with a Flow frontend, call `frontend-svelte-action` with `actionId:\"dev.open\"` and continue only when it reports `browserControlReady:true`.",
       "For `mobile-builder-open`, use `wait:false` for reveal/focus polls; reserve long `wait:true` calls for readiness proof and omit `reveal` unless the user specifically needs UI focus.",
       "Do not pass `reveal:true` on read-only calls. Treat skipped, unsupported, or intent reveal results as UI hints, not mutation failures.",
       "",
@@ -1450,7 +1452,7 @@
     options = options || {};
     var viewerDebugPort = intValue(options.viewerDebugPort, 0, 0, 65535);
     if (viewerDebugPort >= 1024) {
-      return "http://localhost:" + viewerDebugPort;
+      return "http://127.0.0.1:" + viewerDebugPort;
     }
     var endpoint = trim(
       options.playwrightCdpEndpoint ||

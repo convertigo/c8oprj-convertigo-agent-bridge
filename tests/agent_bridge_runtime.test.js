@@ -112,6 +112,12 @@ assert.match(commonSource, /already used successfully in the current conversatio
 assert.match(commonSource, /Common NGX contracts that do not require palette discovery/);
 assert.match(commonSource, /optimizeMutations:true/);
 assert.match(commonSource, /Do not inspect `ALL_TOOLS`/);
+assert.equal(resolvePlaywrightMcpCdpEndpoint({ viewerDebugPort: 40811 }), "http://127.0.0.1:40811");
+
+const revealModePrompt = withRevealModePrompt("Build a Flow frontend", true);
+assert.match(revealModePrompt, /pass `reveal:true` to `code-set` or `code-patch`/);
+assert.match(revealModePrompt, /`actionId:"dev\.open"`/);
+assert.match(revealModePrompt, /`browserControlReady:true`/);
 
 const managedPreflightPrompt = withManagedGuidancePreflight("User message", {
   mcpEndpoint: "http://localhost:18082/convertigo/api/mcp"

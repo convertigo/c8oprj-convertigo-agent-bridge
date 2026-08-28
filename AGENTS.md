@@ -94,6 +94,11 @@ same context.
   write it both to Playwright's `--cdp-endpoint` and to the Convertigo MCP
   `X-Convertigo-Viewer-Debug-Port` header. The MCP injects that transport value
   into viewer calls, so prompts and agents must not carry the port themselves.
+  Normalize the managed Playwright CDP endpoint to `127.0.0.1` so Node does not
+  resolve `localhost` to an IPv6 listener that JxBrowser does not expose.
+- In Flow reveal mode, canonical frontend source writes use `reveal: true`.
+  Before a Playwright action, call `frontend-svelte-action` with `dev.open` and
+  continue only when it reports `browserControlReady: true`.
   When an existing conversation home is repaired, restart its resident Codex
   app-server automatically before submitting the pending prompt.
 - When the Assistant passes `agentProfile=nocode`, `skillProfile=nocode`,
