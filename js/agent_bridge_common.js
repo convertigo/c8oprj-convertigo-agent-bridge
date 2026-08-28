@@ -887,7 +887,7 @@
     }
     var home = String(System.getProperty("user.home"));
     var candidates = [
-      new File(home, "git/c8oprj-c8o-mcp"),
+      new File(home, "git/c8oprj-lib-c8o-mcp"),
       new File(home, "git/c8oprj-convertigo-mcp")
     ];
     for (var i = 0; i < candidates.length; i++) {
@@ -960,7 +960,7 @@
       candidates.push(new File(new File(new File(sourceRoot, "resources"), "convertigo-nocode"), "SKILL.md"));
     }
     var home = String(System.getProperty("user.home"));
-    candidates.push(new File(home, "git/c8oprj-c8o-mcp/resources/convertigo-nocode/SKILL.md"));
+    candidates.push(new File(home, "git/c8oprj-lib-c8o-mcp/resources/convertigo-nocode/SKILL.md"));
     candidates.push(new File(home, "git/c8oprj-convertigo-mcp/resources/convertigo-nocode/SKILL.md"));
     for (var i = 0; i < candidates.length; i++) {
       var file = candidates[i];

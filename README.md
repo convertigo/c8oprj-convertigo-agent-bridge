@@ -13,7 +13,7 @@ pas le wrapper d'agent.
 Le projet `lib_ConvertigoAgentBridge` est un projet Convertigo autonome place dans :
 
 ```text
-/Users/nicolas/git/c8oprj-convertigo-agent-bridge
+/Users/nicolas/git/c8oprj-lib-convertigo-agent-bridge
 ```
 
 Il expose les sequences publiques suivantes :
