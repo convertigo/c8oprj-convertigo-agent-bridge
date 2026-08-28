@@ -97,6 +97,13 @@ same context.
   Normalize the managed Playwright CDP endpoint to `127.0.0.1` so Node does not
   resolve `localhost` to an IPv6 listener that JxBrowser does not expose.
 - In Flow reveal mode, canonical frontend source writes use `reveal: true`.
+  After the first frontend read of every resumed turn, agents call the
+  idempotent `dev.ensure` action with `wait:false` before mutation so a Studio
+  restart does not hide the live construction phase.
+  Local images are imported only through `frontend-svelte-asset-import`; its
+  returned `resources/...` URL is the canonical authoring value. Do not teach
+  agents to copy project assets with shell commands or into generated static
+  directories.
   Before a Playwright action, call `frontend-svelte-action` with `dev.open` and
   continue only when it reports `browserControlReady: true`.
   When an existing conversation home is repaired, restart its resident Codex
