@@ -132,7 +132,7 @@ const managedPreflightPrompt = withManagedGuidancePreflight("User message", {
   mcpEndpoint: "http://localhost:18082/convertigo/api/mcp"
 });
 assert.match(managedPreflightPrompt, /Scoped agent setup status: current/);
-assert.match(managedPreflightPrompt, /2026-08-28\.batch-reveal-v2/);
+assert.match(managedPreflightPrompt, /2026-08-28\.managed-reveal-v3/);
 assert.match(managedPreflightPrompt, /Do not call `_setupCodex`/);
 assert.equal(
   withManagedGuidancePreflight(managedPreflightPrompt, {}).split("Convertigo managed preflight for this turn").length,
@@ -150,7 +150,7 @@ assert.equal(
 );
 assert.equal(
   vibeMcpTransportEndpoint("http://localhost:18082/convertigo/api/mcp?transport=managed&jsonOnly=true#viewer"),
-  "http://localhost:18082/convertigo/api/mcp?transport=managed&jsonOnly=false&descriptorVersion=2026-08-28.batch-reveal-v2#viewer"
+  "http://localhost:18082/convertigo/api/mcp?transport=managed&jsonOnly=false&descriptorVersion=2026-08-28.managed-reveal-v3#viewer"
 );
 const compactCodexConfig = patchCodexMcpConfigText(
   "",
@@ -159,6 +159,17 @@ const compactCodexConfig = patchCodexMcpConfigText(
   "/tmp/codex-home"
 );
 assert.match(compactCodexConfig.text, /url = "http:\/\/localhost:18082\/convertigo\/api\/mcp\?jsonOnly=true"/);
+const revealCodexConfig = patchCodexMcpConfigText(
+  compactCodexConfig.text,
+  "http://localhost:18082/convertigo/api/mcp",
+  { agentRevealMode: "true" },
+  "/tmp/codex-home"
+);
+assert.match(revealCodexConfig.text, /"X-Convertigo-Reveal-Mode" = "true"/);
+assert.doesNotMatch(
+  patchCodexMcpConfigText(revealCodexConfig.text, "http://localhost:18082/convertigo/api/mcp", {}, "/tmp/codex-home").text,
+  /X-Convertigo-Reveal-Mode/
+);
 const flowProfile = agentCapabilityProfile({ agentProfile: "flow", userId: "studio" });
 assert.equal(flowProfile.id, "flow");
 assert.equal(flowProfile.mcpServerName, "convertigo-flow");
@@ -174,7 +185,7 @@ assert.match(flowCodexConfig.text, /url = "http:\/\/localhost:18082\/convertigo\
 assert.match(flowCodexConfig.text, /\[mcp_servers\.convertigo\]/);
 assert.equal(
   buildMcpServers("http://localhost:18082/convertigo/api/mcp")[0].url,
-  "http://localhost:18082/convertigo/api/mcp?jsonOnly=false&descriptorVersion=2026-08-28.batch-reveal-v2"
+  "http://localhost:18082/convertigo/api/mcp?jsonOnly=false&descriptorVersion=2026-08-28.managed-reveal-v3"
 );
 
 const pythonSpec = pythonRuntimeSpec({

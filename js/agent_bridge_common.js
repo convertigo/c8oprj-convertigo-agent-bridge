@@ -16,7 +16,7 @@
   var MAX_EVENT_LIMIT = 500;
   var MAX_EVENT_BUFFER = 5000;
   var NOCODE_MCP_TOKEN_ENV = "C8O_NOCODE_MCP_TOKEN";
-  var MCP_GUIDANCE_VERSION = "2026-08-28.batch-reveal-v2";
+  var MCP_GUIDANCE_VERSION = "2026-08-28.managed-reveal-v3";
   var STUDIO_ROUTER_SKILL_SLUG = "convertigo-studio";
   var AGENT_CAPABILITY_PROFILES = {
     generalist: {
@@ -1761,11 +1761,15 @@
     var timeoutLine = "startup_timeout_sec = 60";
     var enabledLine = "enabled = true";
     var guidanceHeaderEntry = '"X-Convertigo-Guidance-Version" = "' + tomlEscape(codexSkillGuidanceVersion(homePath, options)) + '"';
+    var revealModeHeaderEntry = revealModeEnabled(options, null)
+      ? '"X-Convertigo-Reveal-Mode" = "true"'
+      : "";
     var viewerDebugPort = intValue(options.viewerDebugPort, 0, 0, 65535);
     var viewerDebugPortHeaderEntry = viewerDebugPort >= 1024
       ? '"X-Convertigo-Viewer-Debug-Port" = "' + tomlEscape(String(viewerDebugPort)) + '"'
       : "";
     var managedHeadersLine = "http_headers = { " + guidanceHeaderEntry
+      + (revealModeHeaderEntry.length ? ", " + revealModeHeaderEntry : "")
       + (viewerDebugPortHeaderEntry.length ? ", " + viewerDebugPortHeaderEntry : "") + " }";
     var useBearer = normalizeSkillProfile(options || {}) === "nocode";
     var bearerLine = 'bearer_token_env_var = "' + tomlEscape(NOCODE_MCP_TOKEN_ENV) + '"';
@@ -1780,6 +1784,7 @@
       }
       var body = trim(source.substring(open + 1, close));
       var guidancePattern = /(["']X-Convertigo-Guidance-Version["']\s*=\s*)["'][^"']*["']/;
+      var revealModePattern = /(["']X-Convertigo-Reveal-Mode["']\s*=\s*)["'][^"']*["']/;
       var viewerDebugPortPattern = /(["']X-Convertigo-Viewer-Debug-Port["']\s*=\s*)["'][^"']*["']/;
       if (guidancePattern.test(body)) {
         body = body.replace(guidancePattern, guidanceHeaderEntry);
@@ -1794,6 +1799,16 @@
         }
       } else if (viewerDebugPortPattern.test(body)) {
         body = body.replace(viewerDebugPortPattern, "");
+        body = body.replace(/^\s*,\s*|\s*,\s*$/g, "").replace(/\s*,\s*,\s*/g, ", ");
+      }
+      if (revealModeHeaderEntry.length) {
+        if (revealModePattern.test(body)) {
+          body = body.replace(revealModePattern, revealModeHeaderEntry);
+        } else {
+          body = body.length ? body + ", " + revealModeHeaderEntry : revealModeHeaderEntry;
+        }
+      } else if (revealModePattern.test(body)) {
+        body = body.replace(revealModePattern, "");
         body = body.replace(/^\s*,\s*|\s*,\s*$/g, "").replace(/\s*,\s*,\s*/g, ", ");
       }
       return "http_headers = { " + body + " }";
