@@ -2255,9 +2255,12 @@
       connection.setReadTimeout(5000);
       connection.setRequestMethod("GET");
       connection.setRequestProperty("Accept", "application/json");
-      if (trim(existingCookie).length) {
-        connection.setRequestProperty("Cookie", trim(existingCookie));
-      }
+      connection.setRequestProperty(
+        "Cookie",
+        trim(existingCookie).length
+          ? trim(existingCookie)
+          : "JSESSIONID=managed-mcp-bootstrap-" + String(UUID.randomUUID()).replace(/-/g, "")
+      );
       var code = connection.getResponseCode();
       var refreshed = responseSessionCookie(connection.getHeaderField("Set-Cookie"));
       stream = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
@@ -2266,6 +2269,9 @@
       }
       return refreshed.length ? refreshed : trim(existingCookie);
     } catch (_ignoreMcpSessionRefresh) {
+      try {
+        log.warn("Unable to refresh managed MCP HTTP session for " + endpoint + ": " + String(_ignoreMcpSessionRefresh));
+      } catch (_ignoreMcpSessionRefreshLog) {}
       return trim(existingCookie);
     } finally {
       try { if (stream !== null) stream.close(); } catch (_ignoreMcpStreamClose) {}
