@@ -159,6 +159,22 @@ const compactCodexConfig = patchCodexMcpConfigText(
   "/tmp/codex-home"
 );
 assert.match(compactCodexConfig.text, /url = "http:\/\/localhost:18082\/convertigo\/api\/mcp\?jsonOnly=true"/);
+const sessionCodexConfig = patchCodexMcpConfigText(
+  compactCodexConfig.text,
+  "http://localhost:18082/convertigo/api/mcp",
+  { mcpSessionCookie: "JSESSIONID=session-one" },
+  "/tmp/codex-home"
+);
+assert.match(sessionCodexConfig.text, /"Cookie" = "JSESSIONID=session-one"/);
+assert.equal(mcpSessionCookieFromConfig(sessionCodexConfig.text, "convertigo"), "JSESSIONID=session-one");
+const refreshedSessionCodexConfig = patchCodexMcpConfigText(
+  sessionCodexConfig.text,
+  "http://localhost:18082/convertigo/api/mcp",
+  { mcpSessionCookie: "JSESSIONID=session-two" },
+  "/tmp/codex-home"
+);
+assert.match(refreshedSessionCodexConfig.text, /"Cookie" = "JSESSIONID=session-two"/);
+assert.doesNotMatch(refreshedSessionCodexConfig.text, /JSESSIONID=session-one/);
 const revealCodexConfig = patchCodexMcpConfigText(
   compactCodexConfig.text,
   "http://localhost:18082/convertigo/api/mcp",

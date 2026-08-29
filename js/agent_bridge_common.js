@@ -91,6 +91,7 @@
   var StandardCopyOption = Packages.java.nio.file.StandardCopyOption;
   var StandardOpenOption = Packages.java.nio.file.StandardOpenOption;
   var MessageDigest = Packages.java.security.MessageDigest;
+  var URL = Packages.java.net.URL;
   var InternalRequester = Packages.com.twinsoft.convertigo.engine.requesters.InternalRequester;
   var XMLUtils = Packages.com.twinsoft.convertigo.engine.util.XMLUtils;
   var JsonOutput = Packages.com.twinsoft.convertigo.engine.enums.JsonOutput;
@@ -1768,9 +1769,14 @@
     var viewerDebugPortHeaderEntry = viewerDebugPort >= 1024
       ? '"X-Convertigo-Viewer-Debug-Port" = "' + tomlEscape(String(viewerDebugPort)) + '"'
       : "";
+    var mcpSessionCookie = trim(options.mcpSessionCookie);
+    var mcpSessionCookieHeaderEntry = mcpSessionCookie.length
+      ? '"Cookie" = "' + tomlEscape(mcpSessionCookie) + '"'
+      : "";
     var managedHeadersLine = "http_headers = { " + guidanceHeaderEntry
       + (revealModeHeaderEntry.length ? ", " + revealModeHeaderEntry : "")
-      + (viewerDebugPortHeaderEntry.length ? ", " + viewerDebugPortHeaderEntry : "") + " }";
+      + (viewerDebugPortHeaderEntry.length ? ", " + viewerDebugPortHeaderEntry : "")
+      + (mcpSessionCookieHeaderEntry.length ? ", " + mcpSessionCookieHeaderEntry : "") + " }";
     var useBearer = normalizeSkillProfile(options || {}) === "nocode";
     var bearerLine = 'bearer_token_env_var = "' + tomlEscape(NOCODE_MCP_TOKEN_ENV) + '"';
     var status = "unchanged";
@@ -1786,6 +1792,7 @@
       var guidancePattern = /(["']X-Convertigo-Guidance-Version["']\s*=\s*)["'][^"']*["']/;
       var revealModePattern = /(["']X-Convertigo-Reveal-Mode["']\s*=\s*)["'][^"']*["']/;
       var viewerDebugPortPattern = /(["']X-Convertigo-Viewer-Debug-Port["']\s*=\s*)["'][^"']*["']/;
+      var mcpSessionCookiePattern = /(["']Cookie["']\s*=\s*)["'][^"']*["']/;
       if (guidancePattern.test(body)) {
         body = body.replace(guidancePattern, guidanceHeaderEntry);
       } else {
@@ -1810,6 +1817,13 @@
       } else if (revealModePattern.test(body)) {
         body = body.replace(revealModePattern, "");
         body = body.replace(/^\s*,\s*|\s*,\s*$/g, "").replace(/\s*,\s*,\s*/g, ", ");
+      }
+      if (mcpSessionCookieHeaderEntry.length) {
+        if (mcpSessionCookiePattern.test(body)) {
+          body = body.replace(mcpSessionCookiePattern, mcpSessionCookieHeaderEntry);
+        } else {
+          body = body.length ? body + ", " + mcpSessionCookieHeaderEntry : mcpSessionCookieHeaderEntry;
+        }
       }
       return "http_headers = { " + body + " }";
     };
@@ -2205,6 +2219,78 @@
     return result;
   }
 
+  function mcpSessionCookieFromConfig(configText, serverName) {
+    var lines = String(configText == null ? "" : configText).replace(/\r\n?/g, "\n").split("\n");
+    var range = findTomlSectionRange(lines, "mcp_servers." + trim(serverName));
+    if (!range.found) {
+      return "";
+    }
+    for (var i = range.start + 1; i < range.end; i++) {
+      if (!/^\s*http_headers\s*=/.test(lines[i])) {
+        continue;
+      }
+      var match = /["']Cookie["']\s*=\s*["'](JSESSIONID=[A-Za-z0-9._-]+)["']/.exec(lines[i]);
+      return match === null ? "" : trim(match[1]);
+    }
+    return "";
+  }
+
+  function responseSessionCookie(header) {
+    var match = /(?:^|[,;]\s*)(JSESSIONID=[A-Za-z0-9._-]+)/i.exec(trim(header));
+    return match === null ? "" : match[1];
+  }
+
+  function refreshMcpSessionCookie(mcpEndpoint, existingCookie) {
+    var endpoint = managedMcpTransportEndpoint(mcpEndpoint);
+    var connection = null;
+    var stream = null;
+    try {
+      var url = new URL(endpoint);
+      var host = trim(url.getHost()).toLowerCase();
+      if (host !== "localhost" && host !== "127.0.0.1" && host !== "::1") {
+        return trim(existingCookie);
+      }
+      connection = url.openConnection();
+      connection.setConnectTimeout(5000);
+      connection.setReadTimeout(5000);
+      connection.setRequestMethod("GET");
+      connection.setRequestProperty("Accept", "application/json");
+      if (trim(existingCookie).length) {
+        connection.setRequestProperty("Cookie", trim(existingCookie));
+      }
+      var code = connection.getResponseCode();
+      var refreshed = responseSessionCookie(connection.getHeaderField("Set-Cookie"));
+      stream = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
+      if (stream !== null) {
+        while (stream.read() !== -1) {}
+      }
+      return refreshed.length ? refreshed : trim(existingCookie);
+    } catch (_ignoreMcpSessionRefresh) {
+      return trim(existingCookie);
+    } finally {
+      try { if (stream !== null) stream.close(); } catch (_ignoreMcpStreamClose) {}
+      try { if (connection !== null) connection.disconnect(); } catch (_ignoreMcpDisconnect) {}
+    }
+  }
+
+  function withManagedMcpSession(options, existingConfig, mcpEndpoint) {
+    var next = {};
+    options = options || {};
+    for (var key in options) {
+      if (Object.prototype.hasOwnProperty.call(options, key)) {
+        next[key] = options[key];
+      }
+    }
+    if (!boolValue(options.dryRun, false)) {
+      var serverName = managedMcpServerName(options);
+      next.mcpSessionCookie = refreshMcpSessionCookie(
+        mcpEndpoint,
+        mcpSessionCookieFromConfig(existingConfig, serverName)
+      );
+    }
+    return next;
+  }
+
   function setupCodexGeneralist(options, homePath, mcpEndpoint) {
     var capabilityProfile = agentCapabilityProfile(options);
     var profile = capabilityProfile.id;
@@ -2260,7 +2346,8 @@
         var delegated = setupCodexFromMcpProject(options, codexHome, report.resolvedMcpUrl, profile);
         if (delegated.attempted === true && delegated.ok === true) {
           var delegatedConfig = readTextFile(configFile);
-          var delegatedPatch = patchCodexMcpConfigText(delegatedConfig, delegated.resolvedMcpUrl, options, codexHome);
+          var delegatedOptions = withManagedMcpSession(options, delegatedConfig, delegated.resolvedMcpUrl);
+          var delegatedPatch = patchCodexMcpConfigText(delegatedConfig, delegated.resolvedMcpUrl, delegatedOptions, codexHome);
           if (delegatedPatch.status !== "unchanged" && report.dryRun !== true) {
             writeTextFile(configFile, delegatedPatch.text);
           }
@@ -2341,7 +2428,8 @@
         }
       }
       var existingConfig = readTextFile(configFile);
-      var patchedConfig = patchCodexMcpConfigText(existingConfig, report.resolvedMcpUrl, options, codexHome);
+      var managedOptions = withManagedMcpSession(options, existingConfig, report.resolvedMcpUrl);
+      var patchedConfig = patchCodexMcpConfigText(existingConfig, report.resolvedMcpUrl, managedOptions, codexHome);
       if (patchedConfig.status !== "unchanged" && report.dryRun !== true) {
         writeTextFile(configFile, patchedConfig.text);
       }
