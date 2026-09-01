@@ -31,6 +31,9 @@ const codexSource = fs.readFileSync("js/agent_bridge_codex.js", "utf8");
 vm.runInThisContext(commonSource, {
   filename: "agent_bridge_common.js"
 });
+vm.runInThisContext(codexSource, {
+  filename: "agent_bridge_codex.js"
+});
 
 const compactFailure = compactCommandResult({
   command: "python -m pip install mistral-vibe",
@@ -134,10 +137,32 @@ const managedPreflightPrompt = withManagedGuidancePreflight("User message", {
 assert.match(managedPreflightPrompt, /Scoped agent setup status: current/);
 assert.match(managedPreflightPrompt, /2026-08-28\.managed-reveal-v3/);
 assert.match(managedPreflightPrompt, /Do not call `_setupCodex`/);
+const refreshedBundlePrompt = withManagedGuidancePreflight("User message", {
+  skillBundle: {
+    fingerprint: "bundle-20260901",
+    refreshRequired: true,
+    pendingSlugs: ["convertigo-studio", "convertigo-flow-frontend-svelte"]
+  }
+});
+assert.match(refreshedBundlePrompt, /managed skill bundle fingerprint: bundle-20260901/);
+assert.match(refreshedBundlePrompt, /fully reread these updated skills: convertigo-studio, convertigo-flow-frontend-svelte/);
+assert.match(refreshedBundlePrompt, /bridge records the actual reads/);
 assert.equal(
   withManagedGuidancePreflight(managedPreflightPrompt, {}).split("Convertigo managed preflight for this turn").length,
   2,
   "managed guidance preflight must be idempotent"
+);
+assert.match(commonSource, /MANAGED_SKILL_BUNDLE_STATE_FILE = "managed-skill-bundle\.json"/);
+assert.match(commonSource, /function managedSkillBundleState/);
+assert.match(codexSource, /function recordCodexManagedSkillReads/);
+assert.match(codexSource, /reason: "skill_bundle_changed"/);
+assert.deepEqual(
+  codexManagedSkillReadSlugs("/bin/zsh -lc sed -n '1,240p' /tmp/codex-home/skills/convertigo-flow-frontend-svelte/SKILL.md"),
+  ["convertigo-flow-frontend-svelte"]
+);
+assert.deepEqual(
+  codexManagedSkillReadSlugs("cat C:\\codex-home\\skills\\convertigo-studio\\SKILL.md"),
+  ["convertigo-studio"]
 );
 
 assert.equal(

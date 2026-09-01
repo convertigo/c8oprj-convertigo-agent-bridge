@@ -96,6 +96,13 @@ same context.
   into viewer calls, so prompts and agents must not carry the port themselves.
   Normalize the managed Playwright CDP endpoint to `127.0.0.1` so Node does not
   resolve `localhost` to an IPv6 listener that JxBrowser does not expose.
+- Keep `codex-home/managed-skill-bundle.json` as the per-conversation content
+  fingerprint for managed skills. A new conversation records its initial
+  baseline because it has no stale context. A resumed conversation must reread
+  only the skills whose SHA-256 changed, and the bridge acknowledges the new
+  bundle only after observing those reads. If installed skill content changes
+  while a resident app-server is alive, restart it before submitting the next
+  prompt.
 - In Flow reveal mode, canonical frontend source writes use `reveal: true`.
   After the first frontend read of every resumed turn, agents call the
   idempotent `dev.ensure` action with `wait:false` before mutation so a Studio

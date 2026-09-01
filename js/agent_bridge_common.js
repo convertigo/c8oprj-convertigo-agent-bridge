@@ -18,6 +18,7 @@
   var NOCODE_MCP_TOKEN_ENV = "C8O_NOCODE_MCP_TOKEN";
   var MCP_GUIDANCE_VERSION = "2026-08-28.managed-reveal-v3";
   var STUDIO_ROUTER_SKILL_SLUG = "convertigo-studio";
+  var MANAGED_SKILL_BUNDLE_STATE_FILE = "managed-skill-bundle.json";
   var AGENT_CAPABILITY_PROFILES = {
     generalist: {
       id: "generalist",
@@ -253,6 +254,7 @@
     }
     options = options || {};
     var endpoint = trim(options.mcpEndpoint);
+    var bundle = options.skillBundle || null;
     var lines = [
       marker + ":",
       "- Scoped agent setup status: current.",
@@ -262,6 +264,17 @@
     ];
     if (endpoint.length) {
       lines.splice(2, 0, "- Current Convertigo MCP endpoint: " + endpoint + ".");
+    }
+    if (bundle && trim(bundle.fingerprint).length) {
+      lines.splice(3, 0, "- Current managed skill bundle fingerprint: " + bundle.fingerprint + ".");
+      if (bundle.refreshRequired === true && bundle.pendingSlugs && bundle.pendingSlugs.length) {
+        lines.splice(4, 0,
+          "- The managed skill bundle changed for this conversation. Before any authoring mutation, fully reread these updated skills: " + bundle.pendingSlugs.join(", ") + ".",
+          "- This bundle-refresh requirement overrides later warm-resume guidance that says not to reread managed skills. Do not acknowledge the bundle from memory; the bridge records the actual reads."
+        );
+      } else {
+        lines.splice(4, 0, "- This conversation already acknowledged the current managed skill bundle; do not reread unchanged skills.");
+      }
     }
     lines.push("");
     lines.push(text);
@@ -756,6 +769,88 @@
 
   function writeJsonFile(file, value) {
     writeTextFile(file, JSON.stringify(value || {}, null, 2));
+  }
+
+  function managedSkillBundleSlugs(options) {
+    if (normalizeSkillProfile(options || {}) === "nocode") {
+      return ["convertigo-nocode"];
+    }
+    return [
+      STUDIO_ROUTER_SKILL_SLUG,
+      "convertigo-generalist",
+      "convertigo-flow-mcp",
+      "convertigo-flow-backend",
+      "convertigo-flow-frontend-svelte"
+    ];
+  }
+
+  function managedSkillBundleFingerprint(skillHashes) {
+    var slugs = Object.keys(skillHashes || {}).sort();
+    var values = [];
+    for (var i = 0; i < slugs.length; i++) {
+      values.push(slugs[i] + ":" + String(skillHashes[slugs[i]] || ""));
+    }
+    return values.length ? hashShort(values.join("\n")) : "";
+  }
+
+  function managedSkillBundleState(options, homePath) {
+    var home = trim(homePath);
+    var slugs = managedSkillBundleSlugs(options);
+    var skillHashes = {};
+    var missing = [];
+    if (home.length) {
+      for (var i = 0; i < slugs.length; i++) {
+        var slug = slugs[i];
+        var skillFile = new File(new File(new File(home, "skills"), slug), "SKILL.md");
+        if (!skillFile.isFile()) {
+          missing.push(slug);
+          continue;
+        }
+        skillHashes[slug] = sha256File(skillFile);
+      }
+    } else {
+      missing = slugs.slice(0);
+    }
+    var fingerprint = managedSkillBundleFingerprint(skillHashes);
+    var stateFile = home.length ? new File(home, MANAGED_SKILL_BUNDLE_STATE_FILE) : null;
+    var acknowledged = stateFile !== null ? (readJsonFile(stateFile) || {}) : {};
+    var acknowledgedHashes = acknowledged.skills && typeof acknowledged.skills === "object"
+      ? acknowledged.skills
+      : {};
+    var pendingSlugs = [];
+    for (var j = 0; j < slugs.length; j++) {
+      var pendingSlug = slugs[j];
+      if (!Object.prototype.hasOwnProperty.call(skillHashes, pendingSlug) ||
+          String(acknowledgedHashes[pendingSlug] || "") !== String(skillHashes[pendingSlug] || "")) {
+        pendingSlugs.push(pendingSlug);
+      }
+    }
+    return {
+      ready: home.length > 0 && missing.length === 0,
+      fingerprint: fingerprint,
+      acknowledgedFingerprint: trim(acknowledged.fingerprint),
+      refreshRequired: missing.length > 0 || pendingSlugs.length > 0,
+      slugs: slugs,
+      pendingSlugs: pendingSlugs,
+      missingSlugs: missing,
+      skills: skillHashes,
+      stateFile: stateFile === null ? "" : filePath(stateFile),
+      acknowledgedAt: Number(acknowledged.acknowledgedAt || 0)
+    };
+  }
+
+  function acknowledgeManagedSkillBundle(homePath, bundle) {
+    var home = trim(homePath);
+    if (!home.length || !bundle || bundle.ready !== true || !trim(bundle.fingerprint).length) {
+      return false;
+    }
+    writeJsonFile(new File(home, MANAGED_SKILL_BUNDLE_STATE_FILE), {
+      version: 1,
+      fingerprint: bundle.fingerprint,
+      skills: bundle.skills,
+      acknowledgedAt: now()
+    });
+    return true;
   }
 
   function copyFileBinary(source, target) {
@@ -2534,10 +2629,14 @@
   function installAgentSkills(options, provider, homePath) {
     options = options || {};
     if (normalizeProvider(provider) === "codex") {
+      var codexReport;
       if (normalizeSkillProfile(options) !== "nocode") {
-        return setupCodexStudio(options, homePath);
+        codexReport = setupCodexStudio(options, homePath);
+      } else {
+        codexReport = setupCodexGeneralist(options, homePath, resolveMcpEndpoint(options));
       }
-      return setupCodexGeneralist(options, homePath, resolveMcpEndpoint(options));
+      codexReport.bundle = managedSkillBundleState(options, homePath);
+      return codexReport;
     }
     var profile = normalizeSkillProfile(options);
     var report = {
@@ -7596,6 +7695,14 @@
       browserDebugUrl: entry.browserDebugUrl || "",
       viewerDebugPort: Number(entry.viewerDebugPort || 0),
       playwrightCdpEndpoint: entry.playwrightCdpEndpoint || entry.viewerCdpEndpoint || "",
+      managedSkillBundle: entry.managedSkillBundle ? {
+        ready: entry.managedSkillBundle.ready === true,
+        fingerprint: entry.managedSkillBundle.fingerprint || "",
+        acknowledgedFingerprint: entry.managedSkillBundle.acknowledgedFingerprint || "",
+        refreshRequired: entry.managedSkillBundle.refreshRequired === true,
+        pendingSlugs: entry.managedSkillBundle.pendingSlugs || [],
+        missingSlugs: entry.managedSkillBundle.missingSlugs || []
+      } : null,
       home: entry.home,
       credentials: {
         policy: entry.credentials.policy,

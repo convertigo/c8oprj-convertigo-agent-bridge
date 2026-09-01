@@ -213,25 +213,40 @@
     return text;
   }
 
-  function isCodexManagedSkillRead(value) {
-    var text = trim(String(value || "")).replace(/\s+/g, " ");
+  function codexManagedSkillReadSlugs(value) {
+    var text = trim(String(value || "")).replace(/\\/g, "/").replace(/\s+/g, " ");
     if (!text.length) {
-      return false;
+      return [];
     }
     var lower = text.toLowerCase();
-    var readsManagedSkill = lower.indexOf("skills/convertigo-generalist/skill.md") !== -1 ||
-      lower.indexOf("skills/convertigo-nocode/skill.md") !== -1 ||
-      lower.indexOf("skills/convertigo-studio/skill.md") !== -1 ||
-      lower.indexOf("skills/convertigo-flow-mcp/skill.md") !== -1 ||
-      lower.indexOf("skills/convertigo-flow-backend/skill.md") !== -1 ||
-      lower.indexOf("skills/convertigo-flow-frontend-svelte/skill.md") !== -1;
-    return readsManagedSkill &&
-      (lower.indexOf("sed -n") !== -1 ||
-        lower.indexOf("cat ") !== -1 ||
-        lower.indexOf("/bin/zsh -lc") !== -1 ||
-        lower.indexOf("/bin/bash -lc") !== -1 ||
-        lower.indexOf("zsh -lc") !== -1 ||
-        lower.indexOf("bash -lc") !== -1);
+    var readsFile = lower.indexOf("sed -n") !== -1 ||
+      lower.indexOf("cat ") !== -1 ||
+      lower.indexOf("/bin/zsh -lc") !== -1 ||
+      lower.indexOf("/bin/bash -lc") !== -1 ||
+      lower.indexOf("zsh -lc") !== -1 ||
+      lower.indexOf("bash -lc") !== -1;
+    if (!readsFile) {
+      return [];
+    }
+    var managedSlugs = [
+      "convertigo-generalist",
+      "convertigo-nocode",
+      "convertigo-studio",
+      "convertigo-flow-mcp",
+      "convertigo-flow-backend",
+      "convertigo-flow-frontend-svelte"
+    ];
+    var readSlugs = [];
+    for (var i = 0; i < managedSlugs.length; i++) {
+      if (lower.indexOf("skills/" + managedSlugs[i] + "/skill.md") !== -1) {
+        readSlugs.push(managedSlugs[i]);
+      }
+    }
+    return readSlugs;
+  }
+
+  function isCodexManagedSkillRead(value) {
+    return codexManagedSkillReadSlugs(value).length > 0;
   }
 
   function isCodexManagedSkillReadItem(item) {
@@ -253,6 +268,63 @@
       }
     }
     return false;
+  }
+
+  function codexManagedSkillReadSlugsFromItem(item) {
+    if (!item) {
+      return [];
+    }
+    var parts = [
+      codexItemTitle(item),
+      codexItemText(item),
+      codexToolPreview(item.command),
+      codexToolPreview(item.arguments),
+      codexToolPreview(item.content),
+      codexToolPreview(item.output),
+      codexToolPreview(item.result)
+    ];
+    var found = {};
+    for (var i = 0; i < parts.length; i++) {
+      var slugs = codexManagedSkillReadSlugs(parts[i]);
+      for (var j = 0; j < slugs.length; j++) {
+        found[slugs[j]] = true;
+      }
+    }
+    var result = [];
+    for (var slug in found) {
+      if (Object.prototype.hasOwnProperty.call(found, slug)) {
+        result.push(slug);
+      }
+    }
+    return result.sort();
+  }
+
+  function recordCodexManagedSkillReads(entry, item) {
+    if (!entry || !entry.managedSkillBundle || entry.managedSkillBundle.refreshRequired !== true) {
+      return;
+    }
+    var slugs = codexManagedSkillReadSlugsFromItem(item);
+    entry.managedSkillBundleReadSlugs = entry.managedSkillBundleReadSlugs || {};
+    for (var i = 0; i < slugs.length; i++) {
+      entry.managedSkillBundleReadSlugs[slugs[i]] = true;
+    }
+    var pending = entry.managedSkillBundle.pendingSlugs || [];
+    for (var j = 0; j < pending.length; j++) {
+      if (entry.managedSkillBundleReadSlugs[pending[j]] !== true) {
+        return;
+      }
+    }
+    if (acknowledgeManagedSkillBundle(entry.home && entry.home.path, entry.managedSkillBundle)) {
+      entry.managedSkillBundle.acknowledgedFingerprint = entry.managedSkillBundle.fingerprint;
+      entry.managedSkillBundle.acknowledgedAt = now();
+      entry.managedSkillBundle.refreshRequired = false;
+      entry.managedSkillBundle.pendingSlugs = [];
+      pushEvent(entry, "guidance/acknowledged", {
+        provider: "codex",
+        fingerprint: entry.managedSkillBundle.fingerprint,
+        skills: slugs
+      });
+    }
   }
 
   function codexToolNameFromPayload(payload) {
@@ -482,6 +554,9 @@
       }
       if (isCodexToolItem(itemType)) {
         if (isCodexManagedSkillReadItem(item)) {
+          if (type === "item.completed") {
+            recordCodexManagedSkillReads(entry, item);
+          }
           return;
         }
         pushEvent(entry, type === "item.started" ? "tool/start" : "tool/update", {
@@ -1893,6 +1968,16 @@
     entry.sessionId = trim(options.codexThreadId || options.sessionId || options.externalSessionId);
     entry.codexThreadId = entry.sessionId;
     entry.codexPath = setup.setup.codex.path || "codex";
+    entry.managedSkillBundle = setup.skills && setup.skills.bundle
+      ? setup.skills.bundle
+      : managedSkillBundleState(options, setup.setup.codexHome || (setup.setup.home && setup.setup.home.path));
+    entry.managedSkillBundleFingerprint = trim(entry.managedSkillBundle && entry.managedSkillBundle.fingerprint);
+    entry.managedSkillBundleReadSlugs = {};
+    if (!entry.sessionId.length && entry.managedSkillBundle && entry.managedSkillBundle.refreshRequired === true &&
+        acknowledgeManagedSkillBundle(entry.home && entry.home.path, entry.managedSkillBundle)) {
+      entry.managedSkillBundle = managedSkillBundleState(options, entry.home && entry.home.path);
+      entry.managedSkillBundleFingerprint = trim(entry.managedSkillBundle.fingerprint);
+    }
     registry.put(handle, entry);
     var appServerStartedAt = 0;
     var appServerReadyAt = 0;
@@ -2084,8 +2169,25 @@
             provider: "codex"
           });
         }
+        var latestSkillBundle = managedSkillBundleState(runtimeOptions, entry.home.path);
+        var previousSkillBundleFingerprint = trim(entry.managedSkillBundleFingerprint);
+        var skillBundleChanged = previousSkillBundleFingerprint.length > 0 &&
+          trim(latestSkillBundle.fingerprint).length > 0 &&
+          previousSkillBundleFingerprint !== latestSkillBundle.fingerprint;
+        if (skillBundleChanged) {
+          entry.managedSkillBundleReadSlugs = {};
+          pushEvent(entry, "warning", {
+            message: "The managed Convertigo skill bundle changed; restarting Codex before the next turn.",
+            provider: "codex",
+            reason: "skill_bundle_changed",
+            previousFingerprint: previousSkillBundleFingerprint,
+            currentFingerprint: latestSkillBundle.fingerprint
+          });
+        }
+        entry.managedSkillBundle = latestSkillBundle;
+        entry.managedSkillBundleFingerprint = trim(latestSkillBundle.fingerprint);
         var configRefreshed = bootstrap && bootstrap.generated && bootstrap.generated.indexOf("config.toml") >= 0;
-        if (entry.protocol === "codex-app-server" && configRefreshed) {
+        if (entry.protocol === "codex-app-server" && (configRefreshed || skillBundleChanged)) {
           var restartOptions = runtimeOptions;
           restartOptions.handle = handle;
           restartOptions.prompt = promptText;
@@ -2112,9 +2214,11 @@
             return {
               ok: false,
               status: "error",
-              phase: "codex_config_restart",
+              phase: skillBundleChanged ? "codex_skill_bundle_restart" : "codex_config_restart",
               handle: handle,
-              error: restarted.error || "Unable to restart Codex after refreshing its MCP configuration.",
+              error: restarted.error || (skillBundleChanged
+                ? "Unable to restart Codex after refreshing its managed skill bundle."
+                : "Unable to restart Codex after refreshing its MCP configuration."),
               setup: restarted.setup || null,
               timestamp: now()
             };
@@ -2131,12 +2235,14 @@
     managedBootstrapCompletedAt = now();
     if (managedPreflightCurrent) {
       promptText = withManagedGuidancePreflight(promptText, {
-        mcpEndpoint: runtimeOptions.mcpEndpoint
+        mcpEndpoint: runtimeOptions.mcpEndpoint,
+        skillBundle: entry.managedSkillBundle
       });
     }
     var managedPreflight = {
       setupStatus: managedPreflightCurrent ? "current" : "unverified",
       guidanceVersion: MCP_GUIDANCE_VERSION,
+      skillBundle: entry.managedSkillBundle || null,
       mcpEndpoint: trim(runtimeOptions.mcpEndpoint),
       configStatus: managedBootstrap && managedBootstrap.generated && managedBootstrap.generated.indexOf("config.toml") >= 0
         ? "updated"
