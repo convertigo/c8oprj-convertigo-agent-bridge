@@ -8,6 +8,11 @@ comment: Start a long-running vibe-acp process and create an ACP session.
       installDir: typeof installDir === "undefined" ? "" : installDir,
       cwd: typeof cwd === "undefined" ? "" : cwd,
       mcpEndpoint: typeof mcpEndpoint === "undefined" ? "" : mcpEndpoint,
+      agentProfile: typeof agentProfile === "undefined" ? "" : agentProfile,
+      skillProfile: typeof skillProfile === "undefined" ? "" : skillProfile,
+      assistantContext: typeof assistantContext === "undefined" ? "" : assistantContext,
+      mcpBearerTokenHandle: typeof mcpBearerTokenHandle === "undefined" ? "" : mcpBearerTokenHandle,
+      nocodeMcpTokenHandle: typeof nocodeMcpTokenHandle === "undefined" ? "" : nocodeMcpTokenHandle,
       vibeHome: typeof vibeHome === "undefined" ? "" : vibeHome,
       vibeHomeScope: typeof vibeHomeScope === "undefined" ? "" : vibeHomeScope,
       userId: typeof userId === "undefined" ? "" : userId,
@@ -142,3 +147,18 @@ comment: Start a long-running vibe-acp process and create an ACP session.
 ↓reasoningEffort [variables.RequestableVariable-1787647144866]: 
   comment: Optional Vibe thinking level selected through ACP.
   description: Optional Vibe thinking level selected through ACP.
+↓agentProfile [variables.RequestableVariable-1788358990967]: 
+  comment: Agent capability profile used to select the managed MCP authorization scope.
+  description: Agent capability profile used to select the managed MCP authorization scope.
+↓skillProfile [variables.RequestableVariable-1788358990984]: 
+  comment: Managed skill profile used to select the MCP authorization scope.
+  description: Managed skill profile used to select the MCP authorization scope.
+↓assistantContext [variables.RequestableVariable-1788358991008]: 
+  comment: Assistant surface context used to select the MCP authorization scope.
+  description: Assistant surface context used to select the MCP authorization scope.
+↓mcpBearerTokenHandle [variables.RequestableVariable-1788358991031]: 
+  comment: Opaque server-memory handle for the managed Convertigo MCP bearer token.
+  description: Opaque server-memory handle for the managed Convertigo MCP bearer token.
+↓nocodeMcpTokenHandle [variables.RequestableVariable-1788358991057]: 
+  comment: Opaque server-memory handle for the C8Oforms NoCode MCP bearer token.
+  description: Opaque server-memory handle for the C8Oforms NoCode MCP bearer token.

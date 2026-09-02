@@ -37,10 +37,13 @@
         throw new Error(setup.home.error);
       }
       if (configure) {
-        if (setup.config.selected.valid && trim(setup.config.selected.endpoint) === vibeMcpTransportEndpoint(setup.mcpEndpoint)) {
+        var expectedBearerEnv = usesProtectedConvertigoMcp(setup.mcpEndpoint, options) ? mcpBearerTokenEnv(options) : "";
+        if (setup.config.selected.valid
+            && trim(setup.config.selected.endpoint) === vibeMcpTransportEndpoint(setup.mcpEndpoint)
+            && trim(setup.config.selected.bearerTokenEnv) === expectedBearerEnv) {
           messages.push("Local VIBE_HOME config reused: " + setup.config.selected.path);
         } else {
-          var written = writeLocalVibeConfig(setup.vibeHome, setup.mcpEndpoint, options.model || options.agentModel);
+          var written = writeLocalVibeConfig(setup.vibeHome, setup.mcpEndpoint, options.model || options.agentModel, options);
           messages.push("Local VIBE_HOME config written: " + written.path + " (" + written.model + ")");
         }
         var presets = ensureManagedVibeModelPresets(setup.vibeHome);
@@ -235,6 +238,18 @@
     var existing = registry.get(handle);
     var timeoutMs = intValue(options.requestTimeoutMs, 60000, 1000, 600000);
     if (existing !== null && typeof existing !== "undefined" && processAlive(existing.process)) {
+      var requestedMcpTokenFingerprint = mcpBearerTokenFingerprint(options);
+      if (requestedMcpTokenFingerprint.length
+          && trim(existing.mcpBearerTokenFingerprint) !== requestedMcpTokenFingerprint) {
+        pushEvent(existing, "warning", {
+          phase: "mcp/auth",
+          message: "Vibe must restart to renew its managed Convertigo MCP authorization."
+        });
+        stopEntry(existing, true);
+        existing = null;
+      }
+    }
+    if (existing !== null && typeof existing !== "undefined" && processAlive(existing.process)) {
       try {
         configureVibeSession(existing, options, timeoutMs);
       } catch (configureExistingError) {
@@ -277,6 +292,13 @@
       pythonArchiveFlavor: options.pythonArchiveFlavor,
       allowPythonDownload: options.allowPythonDownload,
       forcePythonInstall: options.forcePythonInstall,
+      mcpBearerToken: options.mcpBearerToken,
+      mcpBearerTokenHandle: options.mcpBearerTokenHandle,
+      nocodeMcpToken: options.nocodeMcpToken || options.noCodeMcpToken,
+      nocodeMcpTokenHandle: options.nocodeMcpTokenHandle || options.noCodeMcpTokenHandle,
+      agentProfile: options.agentProfile,
+      skillProfile: options.skillProfile,
+      assistantContext: options.assistantContext,
       configure: autoConfigure
     });
     if (!setup.ok) {
@@ -300,11 +322,16 @@
     if (vibeHome.length) {
       env.VIBE_HOME = vibeHome;
     }
+    var mcpToken = managedMcpBearerToken(options);
+    if (mcpToken.length) {
+      env[mcpBearerTokenEnv(options)] = mcpToken;
+    }
     var cwd = normalizeDirectory(options.cwd, setup.setup.workspaceRoot, setup.setup.workspaceRoot);
     var mcpEndpoint = trim(options.mcpEndpoint) || setup.setup.mcpEndpoint || resolveMcpEndpoint(options);
     var command = parseCommand(options.command, [setup.setup.vibeAcp.path || "vibe-acp"]);
     var ttlMillis = intValue(options.ttlSeconds, DEFAULT_TTL_SECONDS, 30, 86400) * 1000;
     var entry = createEntry(handle, "vibe", "acp", command, cwd, env, ttlMillis, setup.setup.home, credentials, requestedModel || setup.setup.model);
+    entry.mcpBearerTokenFingerprint = mcpBearerTokenFingerprint(options);
     entry.workspaceRoot = setup.setup.workspaceRoot;
     entry.convertigoRevealMode = revealModeEnabled(options, null);
     registry.put(handle, entry);

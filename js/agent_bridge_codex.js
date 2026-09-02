@@ -1817,16 +1817,22 @@
     var registry = getRegistry();
     var existing = registry.get(handle);
     if (existing !== null && typeof existing !== "undefined" && processAlive(existing.process)) {
+      var requestedMcpTokenFingerprint = mcpBearerTokenFingerprint(options);
+      var mcpTokenChanged = requestedMcpTokenFingerprint.length
+        && trim(existing.mcpBearerTokenFingerprint) !== requestedMcpTokenFingerprint;
       var requestedPlaywrightCdpEndpoint = resolvePlaywrightMcpCdpEndpoint(options);
       var activePlaywrightCdpEndpoint = trim(existing.playwrightCdpEndpoint || existing.viewerCdpEndpoint);
       var requestedScopeOption = trim(options.codexHomeScope || options.homeScope || options.scope);
       var requestedScope = requestedPlaywrightCdpEndpoint.length && !requestedScopeOption.length ? "conversation" : normalizeCodexHomeScope(requestedScopeOption);
       var needsViewerScopedRestart = requestedPlaywrightCdpEndpoint.length && requestedScope === "conversation" && trim(options.codexHome || options.agentHome).length === 0 && existing.home && !isConversationScopedCodexHome(existing.home.path);
-      if ((requestedPlaywrightCdpEndpoint.length && activePlaywrightCdpEndpoint !== requestedPlaywrightCdpEndpoint) || needsViewerScopedRestart) {
+      if ((requestedPlaywrightCdpEndpoint.length && activePlaywrightCdpEndpoint !== requestedPlaywrightCdpEndpoint)
+          || needsViewerScopedRestart || mcpTokenChanged) {
         pushEvent(existing, "warning", {
-          message: "Codex app-server must restart to refresh the managed Playwright MCP viewer endpoint.",
+          message: mcpTokenChanged
+            ? "Codex app-server must restart to renew its managed Convertigo MCP authorization."
+            : "Codex app-server must restart to refresh the managed Playwright MCP viewer endpoint.",
           provider: "codex",
-          reason: needsViewerScopedRestart ? "playwright_requires_conversation_home" : (activePlaywrightCdpEndpoint.length ? "playwright_endpoint_changed" : "playwright_endpoint_available_after_start"),
+          reason: mcpTokenChanged ? "mcp_token_renewed" : (needsViewerScopedRestart ? "playwright_requires_conversation_home" : (activePlaywrightCdpEndpoint.length ? "playwright_endpoint_changed" : "playwright_endpoint_available_after_start")),
           previousEndpoint: activePlaywrightCdpEndpoint,
           requestedEndpoint: requestedPlaywrightCdpEndpoint
         });
@@ -1911,9 +1917,9 @@
     if (setup.setup.codexHome.length) {
       env.CODEX_HOME = setup.setup.codexHome;
     }
-    var noCodeToken = noCodeMcpBearerToken(options);
-    if (noCodeToken.length) {
-      env[NOCODE_MCP_TOKEN_ENV] = noCodeToken;
+    var mcpToken = managedMcpBearerToken(options);
+    if (mcpToken.length) {
+      env[mcpBearerTokenEnv(options)] = mcpToken;
     }
     var nodePath = nodeRuntimeSearchPath(options);
     if (nodePath.length) {
@@ -1950,6 +1956,7 @@
     entry.nocodeMcpTokenHandle = trim(options.nocodeMcpTokenHandle || options.noCodeMcpTokenHandle || options.mcpBearerTokenHandle);
     entry.noCodeMcpTokenHandle = trim(options.noCodeMcpTokenHandle);
     entry.mcpBearerTokenHandle = trim(options.mcpBearerTokenHandle);
+    entry.mcpBearerTokenFingerprint = mcpBearerTokenFingerprint(options);
     entry.mcpEndpoint = resolveMcpEndpoint(options);
     entry.browserDebugUrl = trim(options.browserDebugUrl);
     entry.browserDevToolsJsonUrl = trim(options.browserDevToolsJsonUrl);

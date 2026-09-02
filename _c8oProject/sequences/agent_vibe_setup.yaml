@@ -14,6 +14,11 @@ responseTimeout: 900
       conversationId: typeof conversationId === "undefined" ? "" : conversationId,
       projectId: typeof projectId === "undefined" ? "" : projectId,
       mcpEndpoint: typeof mcpEndpoint === "undefined" ? "" : mcpEndpoint,
+      agentProfile: typeof agentProfile === "undefined" ? "" : agentProfile,
+      skillProfile: typeof skillProfile === "undefined" ? "" : skillProfile,
+      assistantContext: typeof assistantContext === "undefined" ? "" : assistantContext,
+      mcpBearerTokenHandle: typeof mcpBearerTokenHandle === "undefined" ? "" : mcpBearerTokenHandle,
+      nocodeMcpTokenHandle: typeof nocodeMcpTokenHandle === "undefined" ? "" : nocodeMcpTokenHandle,
       model: typeof model === "undefined" ? "" : model,
       pythonPath: typeof pythonPath === "undefined" ? "" : pythonPath,
       pythonInstallDir: typeof pythonInstallDir === "undefined" ? "" : pythonInstallDir,
@@ -124,3 +129,18 @@ responseTimeout: 900
   comment: When true, skips synchronization of the lib_ConvertigoMCP skill pack into the agent home.
   description: When true, skips synchronization of the lib_ConvertigoMCP skill pack into the agent home.
   schemaType: xsd:boolean
+↓agentProfile [variables.RequestableVariable-1788358990871]: 
+  comment: Agent capability profile used to select the managed MCP authorization scope.
+  description: Agent capability profile used to select the managed MCP authorization scope.
+↓skillProfile [variables.RequestableVariable-1788358990889]: 
+  comment: Managed skill profile used to select the MCP authorization scope.
+  description: Managed skill profile used to select the MCP authorization scope.
+↓assistantContext [variables.RequestableVariable-1788358990906]: 
+  comment: Assistant surface context used to select the MCP authorization scope.
+  description: Assistant surface context used to select the MCP authorization scope.
+↓mcpBearerTokenHandle [variables.RequestableVariable-1788358990929]: 
+  comment: Opaque server-memory handle for the managed Convertigo MCP bearer token.
+  description: Opaque server-memory handle for the managed Convertigo MCP bearer token.
+↓nocodeMcpTokenHandle [variables.RequestableVariable-1788358990946]: 
+  comment: Opaque server-memory handle for the C8Oforms NoCode MCP bearer token.
+  description: Opaque server-memory handle for the C8Oforms NoCode MCP bearer token.

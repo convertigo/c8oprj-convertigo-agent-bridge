@@ -126,6 +126,11 @@ same context.
   the Codex process environment, and writes `bearer_token_env_var` to
   `codex-home/config.toml`; never write the raw token to config files, prompts,
   logs, or conversation records.
+- For Studio/generalist sessions, the Assistant supplies an opaque handle for a
+  short-lived `lib_ConvertigoMCP` token. Resolve it only from the shared server
+  store, inject it as `CONVERTIGO_MCP_TOKEN`, and configure Codex or Vibe to
+  derive the Authorization bearer header from that environment variable. Never
+  persist or return the raw token.
 - Experimental Flow support stays on the private `codex/flow-agent-profile`
   branch. The Studio user has one Codex home containing both the Legacy and
   Flow MCP servers. `lib_ConvertigoMCP._setupCodex` owns the Legacy skill pack and

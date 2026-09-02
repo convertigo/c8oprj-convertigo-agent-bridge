@@ -1,5 +1,34 @@
 # Convertigo Agent Bridge
 
+`lib_ConvertigoAgentBridge` is Tigo's local runtime bridge for Convertigo
+Studio. It manages workspace-local OpenAI Codex and Mistral Vibe runtimes,
+persistent agent processes, isolated homes, conversations, events, and local
+viewer integration.
+
+## Highlights
+
+- Installs and updates managed Codex, Vibe, Python, and Node.js runtimes while
+  honoring Convertigo proxy settings.
+- Keeps long-running Codex and Vibe processes behind a stable HTTP/polling
+  contract used by the Tigo Assistant.
+- Isolates homes and conversations inside the Convertigo workspace.
+- Receives only opaque handles for protected MCP credentials. Managed bearer
+  tokens remain in server memory and are never written to runtime profiles,
+  responses, logs, or conversation records.
+- Restarts resident agents transparently when a managed credential is renewed.
+
+## Requirements
+
+- Convertigo Studio 8.4.4 or newer when used by the Tigo local Agent stack.
+- `lib_ConvertigoMCP` for structured Convertigo authoring.
+- `lib_ConvertigoAssistant` for the user-facing Tigo experience.
+
+The project is installed and updated automatically by Tigo's Agent stack
+onboarding. It is a companion service and is not normally invoked directly by
+end users.
+
+## Technical reference
+
 Projet Convertigo dedie a l'integration locale des agents IA dans Convertigo
 Studio.
 
@@ -61,6 +90,15 @@ courante du moteur. Il ajoute `/api/flow-mcp` pour le profil `flow` et
 `/api/mcp` pour les profils legacy/no-code. Le profil Flow est detecte depuis
 le projet selectionne, ou peut etre force avec `agentProfile=flow`. En local,
 les ports habituels sont `18080` en Studio et `28080` en serveur.
+
+L'endpoint Convertigo MCP est protege par bearer token. Pour le profil
+generaliste, l'Assistant authentifie fournit au Bridge un handle opaque vers un
+jeton gere de courte duree. Le Bridge resout ce secret uniquement en memoire,
+configure `CONVERTIGO_MCP_TOKEN` dans l'environnement Codex ou Vibe et redemarre
+le processus resident lors d'un renouvellement. Le jeton brut n'est jamais
+ecrit dans les fichiers de configuration, les reponses HTTP ou les journaux.
+Le profil No Code conserve son jeton C8OForms limite aux outils No Code via
+`C8O_NOCODE_MCP_TOKEN`.
 
 Pour Codex, le profil Flow delegue son bootstrap a
 `lib_flow_mcp._setupCodex`. Le home scope recoit alors le serveur nomme
