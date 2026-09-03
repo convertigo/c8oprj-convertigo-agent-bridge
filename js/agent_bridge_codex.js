@@ -905,6 +905,62 @@
     return params;
   }
 
+  function codexRestartThreadId(entry) {
+    if (!entry || entry.codexHasStartedTurn !== true) {
+      return "";
+    }
+    return trim(entry.codexThreadId || entry.sessionId);
+  }
+
+  function codexMcpStartupStatus(params) {
+    params = params || {};
+    return {
+      name: trim(params.name),
+      status: trim(params.status).toLowerCase(),
+      error: params.error || null,
+      failureReason: params.failureReason || null,
+      updatedAt: now()
+    };
+  }
+
+  function recordCodexMcpStartupStatus(entry, params) {
+    var startup = codexMcpStartupStatus(params);
+    if (!entry.codexMcpStartupStatuses) {
+      entry.codexMcpStartupStatuses = {};
+    }
+    if (startup.name.length) {
+      entry.codexMcpStartupStatuses[startup.name.toLowerCase()] = startup;
+    }
+    return startup;
+  }
+
+  function waitForCodexMcpReady(entry, serverName, timeoutMs) {
+    var name = trim(serverName);
+    if (!name.length) {
+      return null;
+    }
+    var key = name.toLowerCase();
+    var deadline = now() + timeoutMs;
+    while (now() < deadline) {
+      var startup = entry.codexMcpStartupStatuses && entry.codexMcpStartupStatuses[key];
+      if (startup && startup.status === "ready") {
+        return startup;
+      }
+      if (startup && (startup.status === "failed" || startup.status === "error")) {
+        var detail = startup.failureReason || startup.error;
+        if (detail && typeof detail !== "string") {
+          try { detail = JSON.stringify(detail); } catch (_ignoreMcpStartupDetail) { detail = String(detail); }
+        }
+        throw new Error("Codex MCP server " + name + " failed to start" + (trim(detail).length ? ": " + trim(detail) : ""));
+      }
+      if (!processAlive(entry.process)) {
+        throw new Error("Codex process exited while waiting for MCP server " + name);
+      }
+      Thread.sleep(50);
+    }
+    throw new Error("Timeout while waiting for Codex MCP server " + name + " to become ready");
+  }
+
   function sendCodexAppServerRequest(entry, method, params) {
     var id = entry.nextRequestId++;
     var pending = {
@@ -981,6 +1037,15 @@
 
     var thread = codexAppServerThreadFromResponse(threadResponse);
     rememberCodexSession(entry, thread.id || thread.threadId || entry.sessionId || entry.codexThreadId, "app-server");
+    var managedMcpServerName = trim(setup.setup && setup.setup.mcp && setup.setup.mcp.managedServerName);
+    if (managedMcpServerName.length) {
+      entry.phase = "mcp/startup";
+      entry.managedMcpStartup = waitForCodexMcpReady(
+        entry,
+        managedMcpServerName,
+        intValue(options.mcpStartupTimeoutMs, 30000, 1000, 180000)
+      );
+    }
     entry.phase = "ready";
     entry.status = "running";
     entry.session = threadResponse;
@@ -1332,6 +1397,15 @@
       });
       return;
     }
+    if (method === "mcpServer/startupStatus/updated") {
+      recordCodexMcpStartupStatus(entry, params);
+      pushEvent(entry, "codex/event", {
+        method: method,
+        params: params,
+        provider: "codex"
+      });
+      return;
+    }
     if (method === "turn/started") {
       var startedTurn = params.turn || {};
       entry.activeTurnId = startedTurn.id || entry.activeTurnId || "";
@@ -1593,6 +1667,92 @@
       steps: []
     };
     var messages = [];
+    var startupPresenceOnly = boolValue(options.startupPresenceOnly, false);
+    if (!install && startupPresenceOnly) {
+      var presenceStartedAt = now();
+      var presenceSetup = detectCodexRuntimePresence(options);
+      var presenceDetectedAt = now();
+      var presenceBootstrap = {
+        attempted: false,
+        ok: true,
+        home: "",
+        copied: [],
+        reused: [],
+        generated: [],
+        message: "",
+        error: ""
+      };
+      if (presenceSetup.home.error) {
+        messages.push(presenceSetup.home.error);
+      }
+      if (presenceSetup.codex && presenceSetup.codex.found === true &&
+          presenceSetup.home.path.length && !presenceSetup.home.error.length) {
+        presenceBootstrap = bootstrapCodexHome(options, presenceSetup.home.path, presenceSetup.mcpEndpoint);
+        if (presenceBootstrap.message) {
+          messages.push(presenceBootstrap.message);
+        }
+        if (presenceBootstrap.error) {
+          messages.push(presenceBootstrap.error);
+        }
+      }
+      var presenceBootstrappedAt = now();
+      var presenceSkills = installAgentSkills(options, "codex", presenceSetup.codexHome || presenceSetup.home.path);
+      var presenceSkillsInstalledAt = now();
+      if (presenceSkills.message) {
+        messages.push(presenceSkills.message);
+      }
+      if (presenceSkills.error) {
+        messages.push(presenceSkills.error);
+      }
+      presenceSetup = detectCodexRuntimePresence(options);
+      var presenceRedetectedAt = now();
+      if (presenceSetup.playwright) {
+        presenceSetup.playwright.found = presenceSetup.playwright.installed === true;
+      }
+      var presenceProfile = agentCapabilityProfile(options);
+      var presenceMcpReady = presenceProfile.id === "nocode"
+        ? presenceSetup.mcp.hasManagedServer === true
+        : presenceSetup.mcp.hasLegacy === true && (!flowCapabilityAvailable() || presenceSetup.mcp.hasFlow === true);
+      var presenceManagedCodex = presenceSetup.codex.found && commandPathStartsWith(presenceSetup.codex, presenceSetup.installDir);
+      var presencePlaywrightRequired = presenceManagedCodex && !boolValue(options.skipCodexPlaywrightInstall || options.skipPlaywrightInstall, false);
+      var presenceAuthentication = codexDoctorAuthentication(
+        options,
+        presenceSetup.codexHome || presenceSetup.home.path,
+        presenceSetup.codex.path,
+        false
+      );
+      var presenceAuthenticationCheckedAt = now();
+      var presenceRuntimeReady = presenceSetup.codex.found && !presenceSetup.home.error.length &&
+        presenceSkills.ok === true && presenceMcpReady &&
+        (!presencePlaywrightRequired || presenceSetup.playwright.found === true);
+      var presenceReady = presenceRuntimeReady && presenceAuthentication.configured === true;
+      if (!presenceMcpReady) {
+        messages.push("Codex MCP configuration is not ready in the scoped home.");
+      }
+      if (presenceRuntimeReady && !presenceReady) {
+        messages.push("Codex authentication is required. Run codex login or configure OPENAI_API_KEY.");
+      }
+      return {
+        ok: presenceReady,
+        status: presenceReady ? "ready" : (presenceRuntimeReady ? "authentication_required" : "missing"),
+        setup: presenceSetup,
+        authentication: presenceAuthentication,
+        installation: installation,
+        bootstrap: presenceBootstrap,
+        skills: presenceSkills,
+        messages: messages,
+        startupPresenceOnly: true,
+        timings: {
+          detectMs: presenceDetectedAt - presenceStartedAt,
+          bootstrapMs: presenceBootstrappedAt - presenceDetectedAt,
+          skillsMs: presenceSkillsInstalledAt - presenceBootstrappedAt,
+          redetectMs: presenceRedetectedAt - presenceSkillsInstalledAt,
+          authenticationMs: presenceAuthenticationCheckedAt - presenceRedetectedAt,
+          totalMs: presenceAuthenticationCheckedAt - presenceStartedAt
+        },
+        timestamp: now()
+      };
+    }
     if (!install) {
       var preflightSetup = detectCodexRuntimePresence(options);
       if (preflightSetup.codex && preflightSetup.codex.found === true && trim(preflightSetup.codexHome).length) {
@@ -1827,14 +1987,17 @@
       var requestedScopeOption = trim(options.codexHomeScope || options.homeScope || options.scope);
       var requestedScope = requestedPlaywrightCdpEndpoint.length && !requestedScopeOption.length ? "conversation" : normalizeCodexHomeScope(requestedScopeOption);
       var needsViewerScopedRestart = requestedPlaywrightCdpEndpoint.length && requestedScope === "conversation" && trim(options.codexHome || options.agentHome).length === 0 && existing.home && !isConversationScopedCodexHome(existing.home.path);
+      var revealModeChanged = revealModeEnabled(options, existing) !== (existing.convertigoRevealMode === true);
       if ((requestedPlaywrightCdpEndpoint.length && activePlaywrightCdpEndpoint !== requestedPlaywrightCdpEndpoint)
-          || needsViewerScopedRestart || mcpTokenChanged) {
+          || needsViewerScopedRestart || mcpTokenChanged || revealModeChanged) {
         pushEvent(existing, "warning", {
           message: mcpTokenChanged
             ? "Codex app-server must restart to renew its managed Convertigo MCP authorization."
-            : "Codex app-server must restart to refresh the managed Playwright MCP viewer endpoint.",
+            : (revealModeChanged
+              ? "Codex app-server must restart to update Convertigo reveal mode."
+              : "Codex app-server must restart to refresh the managed Playwright MCP viewer endpoint."),
           provider: "codex",
-          reason: mcpTokenChanged ? "mcp_token_renewed" : (needsViewerScopedRestart ? "playwright_requires_conversation_home" : (activePlaywrightCdpEndpoint.length ? "playwright_endpoint_changed" : "playwright_endpoint_available_after_start")),
+          reason: mcpTokenChanged ? "mcp_token_renewed" : (revealModeChanged ? "reveal_mode_changed" : (needsViewerScopedRestart ? "playwright_requires_conversation_home" : (activePlaywrightCdpEndpoint.length ? "playwright_endpoint_changed" : "playwright_endpoint_available_after_start"))),
           previousEndpoint: activePlaywrightCdpEndpoint,
           requestedEndpoint: requestedPlaywrightCdpEndpoint
         });
@@ -1900,16 +2063,32 @@
       skipSkillsInstall: options.skipSkillsInstall || options.skipSkillSync,
       nocodeMcpTokenHandle: options.nocodeMcpTokenHandle || options.noCodeMcpTokenHandle || options.mcpBearerTokenHandle,
       noCodeMcpTokenHandle: options.noCodeMcpTokenHandle,
-      mcpBearerTokenHandle: options.mcpBearerTokenHandle
+      mcpBearerTokenHandle: options.mcpBearerTokenHandle,
+      startupPresenceOnly: true
     });
     var setupCompletedAt = now();
     if (!setup.ok) {
       var authenticationRequired = setup.status === "authentication_required";
+      var setupError = "codex CLI is required before start";
+      if (setup.setup && setup.setup.codex && setup.setup.codex.found === true) {
+        if (setup.setup.mcp && setup.setup.mcp.ok !== true) {
+          var mcpError = trim(setup.setup.mcp.error || setup.setup.mcp.stderr);
+          mcpError = mcpError.replace(/\s+/g, " ");
+          if (mcpError.length > 600) {
+            mcpError = mcpError.substring(0, 597) + "...";
+          }
+          setupError = "Codex MCP configuration is not usable" + (mcpError.length ? ": " + mcpError : "");
+        } else if (setup.messages && setup.messages.length) {
+          setupError = String(setup.messages[setup.messages.length - 1]);
+        } else {
+          setupError = "Codex local setup is incomplete";
+        }
+      }
       return {
         ok: false,
         status: authenticationRequired ? "authentication_required" : "error",
         phase: "setup",
-        error: authenticationRequired ? "Codex authentication is required before start" : "codex CLI is required before start",
+        error: authenticationRequired ? "Codex authentication is required before start" : setupError,
         setup: setup,
         timestamp: now()
       };
@@ -1969,21 +2148,18 @@
     entry.serviceTier = trim(options.serviceTier || options.speedTier);
     entry.baseEnv = copyEnvObject(env);
     entry.codexRuntimeMode = runtimeMode;
+    entry.codexMcpStartupStatuses = {};
     entry.status = "ready";
     entry.phase = "ready";
     entry.sessionId = trim(options.codexThreadId || options.sessionId || options.externalSessionId);
     entry.codexThreadId = entry.sessionId;
+    entry.codexHasStartedTurn = entry.sessionId.length > 0;
     entry.codexPath = setup.setup.codex.path || "codex";
     entry.managedSkillBundle = setup.skills && setup.skills.bundle
       ? setup.skills.bundle
       : managedSkillBundleState(options, setup.setup.codexHome || (setup.setup.home && setup.setup.home.path));
     entry.managedSkillBundleFingerprint = trim(entry.managedSkillBundle && entry.managedSkillBundle.fingerprint);
     entry.managedSkillBundleReadSlugs = {};
-    if (!entry.sessionId.length && entry.managedSkillBundle && entry.managedSkillBundle.refreshRequired === true &&
-        acknowledgeManagedSkillBundle(entry.home && entry.home.path, entry.managedSkillBundle)) {
-      entry.managedSkillBundle = managedSkillBundleState(options, entry.home && entry.home.path);
-      entry.managedSkillBundleFingerprint = trim(entry.managedSkillBundle.fingerprint);
-    }
     registry.put(handle, entry);
     var appServerStartedAt = 0;
     var appServerReadyAt = 0;
@@ -2046,9 +2222,10 @@
       timings: {
         acceptedAt: operationStartedAt,
         setupStartedAt: setupStartedAt,
-        setupCompletedAt: setupCompletedAt,
-        setupMs: setupCompletedAt - setupStartedAt,
-        appServerStartedAt: appServerStartedAt,
+          setupCompletedAt: setupCompletedAt,
+          setupMs: setupCompletedAt - setupStartedAt,
+          setupDetails: setup.timings || {},
+          appServerStartedAt: appServerStartedAt,
         appServerReadyAt: appServerReadyAt,
         appServerStartMs: appServerStartedAt > 0 && appServerReadyAt >= appServerStartedAt ? appServerReadyAt - appServerStartedAt : 0,
         appServerReused: false,
@@ -2163,18 +2340,9 @@
     var managedBootstrapStartedAt = now();
     var managedBootstrapCompletedAt = managedBootstrapStartedAt;
     var managedBootstrap = null;
-    var managedPreflightCurrent = false;
+    var managedPreflightCurrent = entry.home && trim(entry.home.path).length > 0;
     try {
       if (entry.home && trim(entry.home.path).length) {
-        var bootstrap = bootstrapCodexHome(runtimeOptions, entry.home.path, resolveMcpEndpoint(runtimeOptions));
-        managedBootstrap = bootstrap;
-        managedPreflightCurrent = bootstrap && bootstrap.ok !== false;
-        if (bootstrap && bootstrap.ok === false) {
-          pushEvent(entry, "warning", {
-            message: bootstrap.error || bootstrap.message || "Unable to refresh Codex home",
-            provider: "codex"
-          });
-        }
         var latestSkillBundle = managedSkillBundleState(runtimeOptions, entry.home.path);
         var previousSkillBundleFingerprint = trim(entry.managedSkillBundleFingerprint);
         var skillBundleChanged = previousSkillBundleFingerprint.length > 0 &&
@@ -2189,10 +2357,19 @@
             previousFingerprint: previousSkillBundleFingerprint,
             currentFingerprint: latestSkillBundle.fingerprint
           });
+          var bootstrap = bootstrapCodexHome(runtimeOptions, entry.home.path, resolveMcpEndpoint(runtimeOptions));
+          managedBootstrap = bootstrap;
+          managedPreflightCurrent = bootstrap && bootstrap.ok !== false;
+          if (bootstrap && bootstrap.ok === false) {
+            pushEvent(entry, "warning", {
+              message: bootstrap.error || bootstrap.message || "Unable to refresh Codex home",
+              provider: "codex"
+            });
+          }
         }
         entry.managedSkillBundle = latestSkillBundle;
         entry.managedSkillBundleFingerprint = trim(latestSkillBundle.fingerprint);
-        var configRefreshed = bootstrap && bootstrap.generated && bootstrap.generated.indexOf("config.toml") >= 0;
+        var configRefreshed = managedBootstrap && managedBootstrap.generated && managedBootstrap.generated.indexOf("config.toml") >= 0;
         if (entry.protocol === "codex-app-server" && (configRefreshed || skillBundleChanged)) {
           var restartOptions = runtimeOptions;
           restartOptions.handle = handle;
@@ -2203,7 +2380,11 @@
           restartOptions.cwd = entry.cwd;
           restartOptions.codexPath = entry.codexPath;
           restartOptions.codexRuntimeMode = entry.codexRuntimeMode;
-          restartOptions.codexThreadId = entry.codexThreadId || entry.sessionId;
+          restartOptions.codexThreadId = codexRestartThreadId(entry);
+          if (!restartOptions.codexThreadId.length) {
+            restartOptions.sessionId = "";
+            restartOptions.externalSessionId = "";
+          }
           restartOptions.model = entry.model;
           restartOptions.reasoningEffort = entry.reasoningEffort;
           restartOptions.serviceTier = entry.serviceTier;
@@ -2281,6 +2462,7 @@
       }
       try {
         var turnPending = sendCodexAppServerRequest(entry, "turn/start", codexTurnParams(entry, options, promptText, appServerRequestId));
+        entry.codexHasStartedTurn = true;
         pushEvent(entry, "turn/start", {
           requestId: turnPending.id,
           provider: "codex",

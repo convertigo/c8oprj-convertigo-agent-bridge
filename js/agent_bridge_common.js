@@ -17,11 +17,12 @@
   var MAX_EVENT_BUFFER = 5000;
   var NOCODE_MCP_TOKEN_ENV = "C8O_NOCODE_MCP_TOKEN";
   var MCP_TOKEN_ENV = "CONVERTIGO_MCP_TOKEN";
-  var MCP_GUIDANCE_VERSION = "2026-08-28.managed-reveal-v3";
+  var MCP_GUIDANCE_VERSION = "2026-09-03.viewer-hydration-v1";
   var STUDIO_ROUTER_SKILL_SLUG = "convertigo-studio";
   var MANAGED_SKILL_BUNDLE_STATE_FILE = "managed-skill-bundle.json";
   var FLOW_MINIMUM_CONVERTIGO_VERSION = "8.4.0";
   var FLOW_REQUIRED_PROJECTS = ["lib_flow_engine", "lib_flow_mcp"];
+  var flowCapabilityAvailabilityCache = null;
   var AGENT_CAPABILITY_PROFILES = {
     generalist: {
       id: "generalist",
@@ -969,18 +970,40 @@
 
   function flowCapabilityAvailability() {
     var engineVersion = engineProductVersion();
-    var missingProjects = [];
-    for (var i = 0; i < FLOW_REQUIRED_PROJECTS.length; i++) {
-      if (projectDirectoryByName(FLOW_REQUIRED_PROJECTS[i]) === null) {
-        missingProjects.push(FLOW_REQUIRED_PROJECTS[i]);
-      }
+    var versionSupported = versionAtLeast(engineVersion, FLOW_MINIMUM_CONVERTIGO_VERSION);
+    if (!versionSupported) {
+      return {
+        available: false,
+        engineVersion: engineVersion,
+        versionSupported: false,
+        missingProjects: []
+      };
     }
-    return {
-      available: versionAtLeast(engineVersion, FLOW_MINIMUM_CONVERTIGO_VERSION) && missingProjects.length === 0,
+    if (flowCapabilityAvailabilityCache !== null &&
+        flowCapabilityAvailabilityCache.engineVersion === engineVersion &&
+        now() - flowCapabilityAvailabilityCache.checkedAt < 5000) {
+      return flowCapabilityAvailabilityCache;
+    }
+    var missingProjects = [];
+    try {
+      var manager = Packages.com.twinsoft.convertigo.engine.Engine.theApp.databaseObjectsManager;
+      var projectNames = manager.getAllProjectNamesList(false);
+      for (var i = 0; i < FLOW_REQUIRED_PROJECTS.length; i++) {
+        if (!projectNames.contains(FLOW_REQUIRED_PROJECTS[i])) {
+          missingProjects.push(FLOW_REQUIRED_PROJECTS[i]);
+        }
+      }
+    } catch (_ignoreFlowProjectInventory) {
+      missingProjects = FLOW_REQUIRED_PROJECTS.slice(0);
+    }
+    flowCapabilityAvailabilityCache = {
+      available: missingProjects.length === 0,
       engineVersion: engineVersion,
-      versionSupported: versionAtLeast(engineVersion, FLOW_MINIMUM_CONVERTIGO_VERSION),
-      missingProjects: missingProjects
+      versionSupported: true,
+      missingProjects: missingProjects,
+      checkedAt: now()
     };
+    return flowCapabilityAvailabilityCache;
   }
 
   function flowCapabilityAvailable() {
@@ -1469,7 +1492,7 @@
       "- Studio JxBrowser exposes one existing visible page over CDP, not a normal multi-tab browser. Reuse it and do not create, open, close, select, or navigate tabs/pages.",
       "- For viewer automation, use the Playwright MCP tools exposed by the managed Codex configuration. Do not run ad hoc shell scripts with `require('playwright')`, and do not launch a separate browser unless explicitly needed.",
       isFlow ? "- Use Playwright only after the capability pack reports that the dev viewer is ready and the managed browser target shows that viewer." : "- Use Playwright only after `mobile-builder-open` reports both `browserDebugPortMatched:true` and `browserControlReady:true`.",
-      "- Known-good fast check: call `playwright.browser_tabs` only to list and confirm the single current viewer URL, use `playwright.browser_find` for visible UI, and use `playwright.browser_evaluate` only for DOM state or timing. Do not probe unsupported browser features first.",
+      "- Known-good fast check: `playwright.browser_tabs({action:\"list\"})`, then `playwright.browser_find({text:\"<visible text>\"})`; use `playwright.browser_evaluate({function:\"...\"})` only for DOM state or timing. Do not probe unsupported browser features first.",
       isFlow ? "- If the browser target is `about:blank`, use the capability pack readiness contract before browser proof." : "- If the browser target is `about:blank` while builder status is `building`, poll `mobile-builder-open(stateOnly=true, wait=true)` before Playwright. If status is `stopped`, launch asynchronously instead.",
       isFlow ? "- If Playwright is unavailable, disabled, still on `about:blank`, or attached to another endpoint, report the host configuration problem instead of bypassing it." : "- If `mobile-builder-open` reports `browserControlReady:true` but the Playwright/browser-control MCP tools are unavailable, disabled, still on `about:blank`, or attached to another endpoint, report the configuration problem to the user instead of bypassing it with Node scripts, raw CDP WebSocket code, or a new browser.",
       "- If a prompt says Convertigo runtime reveal mode is enabled, pass `reveal:true` only on supported Convertigo mutation/viewer tools that should visibly move Studio or No Code Studio; do not add it to read-only calls.",
@@ -1648,13 +1671,8 @@
 
   function removeTrailingPlaywrightConfigComments(lines) {
     lines = lines || [];
-    var end = lines.length;
-    var i = end - 1;
-    while (i >= 0 && !trim(lines[i]).length) {
-      i--;
-    }
-    var lastContent = i;
-    while (i >= 0) {
+    var retained = [];
+    for (var i = 0; i < lines.length; i++) {
       var line = trim(lines[i]);
       if (line === "# The Studio JxBrowser CDP endpoint is supplied by the Codex process environment." ||
           line === "# Do not hardcode it here; several conversations may target different builders." ||
@@ -1662,15 +1680,11 @@
           line === "# This scoped home may target a different builder than another conversation." ||
           line === "# The Studio JxBrowser CDP endpoint is written here because this Codex home is viewer-scoped." ||
           line === "# If a shared/user home is forced, Playwright MCP stays disabled to avoid opening an external browser.") {
-        i--;
         continue;
       }
-      break;
+      retained.push(lines[i]);
     }
-    if (i < lastContent) {
-      return lines.slice(0, i + 1);
-    }
-    return lines;
+    return retained;
   }
 
   function npmPackageNameFromSpec(spec) {
@@ -1855,8 +1869,25 @@
     return firstWorkingCommand(candidates, ["--version"], nodeRuntimeSearchPath(options));
   }
 
+  function detectNpxRuntimePresence(options) {
+    options = options || {};
+    var workspaceRoot = resolveWorkspaceRoot(options);
+    var userHome = String(System.getProperty("user.home"));
+    var localNodeDir = normalizeDirectory(options.nodeDir || options.nodeInstallDir, filePath(ProcessUtils.getDefaultNodeDir()), workspaceRoot);
+    var npxName = scriptCommandName("npx");
+    return firstExistingCommand([
+      trim(options.npxPath),
+      childPath(localNodeDir, npxName),
+      childPath(childPath(localNodeDir, "bin"), npxName),
+      childPath(childPath(userHome, ".local"), "bin/" + npxName),
+      "/opt/homebrew/bin/" + npxName,
+      "/usr/local/bin/" + npxName,
+      npxName
+    ], nodeRuntimeSearchPath(options));
+  }
+
   function codexPlaywrightMcpCommand(options, installDir) {
-    var npx = detectNpxRuntime(options || {});
+    var npx = detectNpxRuntimePresence(options || {});
     return npx.found ? npx.path : "npx";
   }
 
@@ -1956,6 +1987,19 @@
     var lines = trim(text).length ? splitTextLines(text) : [];
     var serverName = managedMcpServerName(options);
     var sectionName = "mcp_servers." + serverName;
+    var headersSectionName = sectionName + ".http_headers";
+    var headersRange = findTomlSectionRange(lines, headersSectionName);
+    var inheritedHeaderEntries = [];
+    var status = "unchanged";
+    if (headersRange.found) {
+      for (var headerIndex = headersRange.start + 1; headerIndex < headersRange.end; headerIndex++) {
+        if (/^\s*(?:["'][^"']+["']|[A-Za-z0-9_.-]+)\s*=/.test(lines[headerIndex])) {
+          inheritedHeaderEntries.push(trim(lines[headerIndex]));
+        }
+      }
+      lines = lines.slice(0, headersRange.start).concat(lines.slice(headersRange.end));
+      status = "updated";
+    }
     var range = findTomlSectionRange(lines, sectionName);
     var urlLine = 'url = "' + tomlEscape(managedMcpTransportEndpoint(mcpEndpoint)) + '"';
     var timeoutLine = "startup_timeout_sec = 60";
@@ -1972,22 +2016,33 @@
     var mcpSessionCookieHeaderEntry = mcpSessionCookie.length
       ? '"Cookie" = "' + tomlEscape(mcpSessionCookie) + '"'
       : "";
-    var managedHeadersLine = "http_headers = { " + guidanceHeaderEntry
-      + (revealModeHeaderEntry.length ? ", " + revealModeHeaderEntry : "")
-      + (viewerDebugPortHeaderEntry.length ? ", " + viewerDebugPortHeaderEntry : "")
-      + (mcpSessionCookieHeaderEntry.length ? ", " + mcpSessionCookieHeaderEntry : "") + " }";
     var useBearer = usesProtectedConvertigoMcp(mcpEndpoint, options);
     var bearerLine = 'bearer_token_env_var = "' + tomlEscape(mcpBearerTokenEnv(options)) + '"';
-    var status = "unchanged";
+
+    var headerEntryKey = function (entry) {
+      var match = /^\s*([^=]+?)\s*=/.exec(String(entry || ""));
+      return match === null ? "" : trim(match[1]).replace(/^["']|["']$/g, "").toLowerCase();
+    };
 
     var mergeManagedHeaders = function (line) {
       var source = String(line || "");
       var open = source.indexOf("{");
       var close = source.lastIndexOf("}");
-      if (open < 0 || close <= open) {
-        return managedHeadersLine;
+      var body = open < 0 || close <= open ? "" : trim(source.substring(open + 1, close));
+      var existingHeaderKeys = {};
+      var existingHeaderPattern = /(?:^|,)\s*([^=,]+?)\s*=/g;
+      var existingHeaderMatch;
+      while ((existingHeaderMatch = existingHeaderPattern.exec(body)) !== null) {
+        existingHeaderKeys[trim(existingHeaderMatch[1]).replace(/^["']|["']$/g, "").toLowerCase()] = true;
       }
-      var body = trim(source.substring(open + 1, close));
+      for (var inheritedIndex = 0; inheritedIndex < inheritedHeaderEntries.length; inheritedIndex++) {
+        var inheritedEntry = inheritedHeaderEntries[inheritedIndex];
+        var inheritedKey = headerEntryKey(inheritedEntry);
+        if (inheritedKey.length && existingHeaderKeys[inheritedKey] !== true) {
+          body = body.length ? body + ", " + inheritedEntry : inheritedEntry;
+          existingHeaderKeys[inheritedKey] = true;
+        }
+      }
       var guidancePattern = /(["']X-Convertigo-Guidance-Version["']\s*=\s*)["'][^"']*["']/;
       var revealModePattern = /(["']X-Convertigo-Reveal-Mode["']\s*=\s*)["'][^"']*["']/;
       var viewerDebugPortPattern = /(["']X-Convertigo-Viewer-Debug-Port["']\s*=\s*)["'][^"']*["']/;
@@ -2026,6 +2081,7 @@
       }
       return "http_headers = { " + body + " }";
     };
+    var managedHeadersLine = mergeManagedHeaders("http_headers = { }");
 
     if (!range.found) {
       if (lines.length && trim(lines[lines.length - 1]).length) {
@@ -2218,23 +2274,29 @@
       "",
       "- Treat every tool round trip and large response as part of the task cost. Prefer targeted reads and request only the depth, properties, logs, or detail needed for the next decision.",
       "- Do not repeat catalog, guide, palette, tree, builder, or browser reads whose answer is already present in the current conversation.",
+      "- Do not use shell, PowerShell, `rg`, or filesystem scans to rediscover MCP tool signatures or examples already exposed by callable schemas and named recipes. Never recursively search a drive root, user profile, workspace root, or generated frontend tree for browser/build diagnostics; use `mobile-builder-open`, `log-view`, and the managed Playwright page.",
       "- Use `palette-list` to locate an unfamiliar object type and `palette-describe` only for properties that remain uncertain. Group independent descriptions when the caller can do so safely.",
       "- Build one coherent mutation plan before the first write. Prefer one optimized `batch-call` for independent or ordered source-object changes, followed by one targeted readback.",
       "- A class/property shape already used successfully in the current conversation or returned by a targeted tree read is a confirmed contract. Do not reconfirm it through palette calls or tool-metadata inspection.",
-      "- Common NGX contracts that do not require palette discovery are `UIStyle#UIStyle.styleContent`, `UIAttribute#UIAttribute.attrName/attrValue`, `UIDynamicElement#TextItem`, and `UIText#UIText.textValue`.",
+      "- Common NGX contracts that do not require palette discovery are `UIStyle#UIStyle.styleContent`, `UIAttribute#UIAttribute.attrName/attrValue`, `UIDynamicElement#TextItem`, `UIText#UIText.textValue`, `UIPageEvent#UIPageEvent.viewEvent`, and `UICustomAction#UICustomAction.actionValue`.",
       "- For one intent spanning independent targets, call `batch-call` with `{calls:[{tool:\"databaseobject-tree-apply\",arguments:{...}}],onError:\"stop\",optimizeMutations:true}`. The optimized batch performs one final refresh, save, and mobile-builder notification.",
-      "- Named core tools in this skill are already routed. Do not inspect `ALL_TOOLS` merely to rediscover the signatures of `batch-call`, `mobile-builder-open`, or Playwright snapshot/find/evaluate calls.",
+      "- Named core tools in this skill are already routed. Do not inspect `ALL_TOOLS` merely to rediscover `batch-call`, `mobile-builder-open`, `log-view`, or Playwright calls.",
       "- For `databaseobject-tree-get`, use `childrenDepth` for recursive descendants and request the needed subtree once instead of walking one QName level per call. `depth` is accepted only as a compatibility alias.",
-      "- For `databaseobject-tree-apply` with `at:\"inside\"`, `tree` is the one child being created and must include its own `className` and `name`; never submit a children-only wrapper. Put sibling creations in separate optimized `batch-call` entries.",
+      "- `databaseobject-tree-apply` always takes the target QName in `target`, never in `qname`. With `at:\"inside\"`, `tree` is the one child being created and must include its own `className` and `name`; never submit a children-only wrapper. Put sibling creations in separate optimized `batch-call` entries.",
       "- For an unfamiliar NGX object, call `palette-list` with the exact intended parent QName as `target`, then pass its returned logical `className` unchanged to `palette-describe`. Do not list at project scope and guess a `#logicalId`.",
       "- Start the viewer asynchronously once UI work is known. Finish the source mutations while it builds, then perform one readiness check and one acceptance-oriented browser proof. Add another cycle only when the proof identifies a concrete defect.",
+      "- For a new standard NGX app, the canonical import call is `marketplace-import({project:\"template_ngxBuilderIonic\", importedProjectName:\"<targetProject>\"})`. Call `mobile-builder-open({project:\"<targetProject>\", wait:false})` immediately after import; do not probe `stateOnly:true` before launching.",
+      "- If that first viewer launch reports a Node download, npm install, or cold Angular build, finish useful mutations and make one readiness call with `stateOnly:true, wait:true, timeoutSec:180` instead of repeating 30-second polls.",
       "- A browser proof should evaluate all relevant acceptance criteria together when practical: visible content, layout/style, interaction or timed state, and console/runtime errors.",
       "- Stop after the requested behavior is green. Do not add an unsolicited polish pass or repeat proof that cannot change the conclusion.",
       "",
       "## NGX authoring invariants",
       "",
       "- Use the exact SmartType shape reported by the live palette or a successful readback. Do not invent aliases such as `JS`, `SCRIPT`, `PLAIN`, `expression`, or `value` interchangeably.",
-      "- For page state changed outside an Angular/Ionic event, such as timers, external callbacks, or third-party subscriptions, ensure Angular change detection is triggered through the supported page context before claiming live updates.",
+      "- Before changing a page `scriptContent`, read it with `properties:\"all\"`, preserve the complete existing string and every `Begin_c8o_...` / `End_c8o_...` section, and edit only the intended section. `mode:\"merge\"` replaces the whole string property; it does not merge script sections.",
+      "- Every non-empty NGX `identifier` becomes an Angular/TypeScript reference and must match `[A-Za-z_$][A-Za-z0-9_$]*`, for example `clockDisplay`, never `clock-display`.",
+      "- Do not declare framework lifecycle methods such as `ngOnDestroy` in page `scriptContent` unless the live Convertigo contract explicitly provides that extension point. Use a supported page event for cleanup instead of guessing a generated method name.",
+      "- For page state changed outside an Angular/Ionic event, such as timers, external callbacks, or third-party subscriptions, mutate the state and trigger Angular change detection through the supported page context in the same callback before claiming live updates.",
       "- Scope page CSS to the element that actually paints the visible area. Do not assume a class or CSS variable crosses an Ionic shadow boundary; include background coverage in the first browser proof.",
       "- When a mutation result reports skipped or normalized properties, repair them before browser proof instead of relying on runtime trial and error.",
       "",
@@ -2268,17 +2330,19 @@
       "",
       "- In dev, `mobile-builder-open` serves the live app from the viewer root. Prefer `viewerHomeUrl`, or fall back to `viewerBaseUrl`.",
       "- For frontend work, call `mobile-builder-open` with `wait=false` as soon as the UI project is known, continue other work while it starts, then call `mobile-builder-open(stateOnly=true, wait=true)` or a normal waited call before browser smoke or final proof.",
+      "- Do not issue a state-only call before the first asynchronous launch. If the launch reports a cold Node/npm/Angular build, use one waited state call with `timeoutSec:180` after useful mutations instead of repeated 30-second polls.",
       "- If `mobile-builder-open` returns `browserDebugUrl`, `browserDevToolsJsonUrl`, or `browserDevToolsWebSocketUrl`, attach the Playwright MCP browser tools to that visible Studio JxBrowser endpoint and verify the actual feature there.",
       "- If a state-only call returns `status:\"stopped\"`, do not poll it again: immediately call `mobile-builder-open(stateOnly=false, wait=false)` once, continue other work while it starts, then poll readiness.",
       "- Use Playwright MCP only after `mobile-builder-open` reports both `browserDebugPortMatched:true` and `browserControlReady:true`.",
       "- Studio JxBrowser exposes one existing visible page over CDP, not a normal multi-tab browser. Do not create, open, close, select, or navigate tabs/pages; reuse the current page.",
       "- In managed Codex sessions, browser automation is exposed through the Playwright MCP server configured in `codex-home/config.toml`. Use the MCP browser tools; do not run ad hoc shell scripts with `require('playwright')` or raw WebSocket CDP snippets.",
-      "- Known-good fast check on this JxBrowser target: call `playwright.browser_tabs` only to list and confirm the single current viewer URL, use `playwright.browser_find` for visible UI, and use `playwright.browser_evaluate` only when DOM state or timing must be measured. Do not probe unsupported browser features before this minimal check.",
+      "- Known-good fast check on this JxBrowser target: `playwright.browser_tabs({action:\"list\"})`, then `playwright.browser_find({text:\"<visible text>\"})`; use `playwright.browser_evaluate({function:\"...\"})` only when DOM state or timing must be measured. Do not probe unsupported browser features before this minimal check.",
       "- An `about:blank` target means the loader is not ready. If the builder status is `building`, poll `mobile-builder-open(stateOnly=true, wait=true)`; if it is `stopped`, launch it asynchronously as described above.",
       "- If Playwright/browser-control MCP tools are missing, disabled, on `about:blank`, stale, or not attached to the returned Studio JxBrowser endpoint, stop the browser proof and tell the user that the managed Playwright MCP configuration must be refreshed. Do not work around it with Node scripts, raw CDP, or a new browser.",
       "- Do not open `DisplayObjects/mobile/...` against the live HMR viewer.",
       "- In prod, the application URL is `.../DisplayObjects/mobile/home`.",
       "- If `mobile-builder-open` reports `compile_error`, treat that as a generator or source-object issue. Do not patch generated runtime sources.",
+      "- If builder diagnostics are insufficient, make one focused `log-view({project:\"<targetProject>\",level:\"error\",limit:40,timeoutMs:0})` call. Do not issue separate error and warning scans.",
       "",
       "## Optional UI reveal mode",
       "",
@@ -2478,6 +2542,15 @@
 
   function mcpSessionCookieFromConfig(configText, serverName) {
     var lines = String(configText == null ? "" : configText).replace(/\r\n?/g, "\n").split("\n");
+    var nestedRange = findTomlSectionRange(lines, "mcp_servers." + trim(serverName) + ".http_headers");
+    if (nestedRange.found) {
+      for (var nestedIndex = nestedRange.start + 1; nestedIndex < nestedRange.end; nestedIndex++) {
+        var nestedMatch = /^\s*["']?Cookie["']?\s*=\s*["'](JSESSIONID=[A-Za-z0-9._-]+)["']/.exec(lines[nestedIndex]);
+        if (nestedMatch !== null) {
+          return trim(nestedMatch[1]);
+        }
+      }
+    }
     var range = findTomlSectionRange(lines, "mcp_servers." + trim(serverName));
     if (!range.found) {
       return "";

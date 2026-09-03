@@ -104,15 +104,98 @@ assert.match(commonSource, /function verifiedCodexAuthentication/);
 assert.match(commonSource, /"codex-auth:" \+ hashShort/);
 assert.match(commonSource, /return firstExpired !== null \? firstExpired/);
 assert.match(commonSource, /"doctor", "--json"/);
+assert.match(commonSource, /function detectNpxRuntimePresence/);
+assert.match(commonSource, /var npx = detectNpxRuntimePresence\(options \|\| \{\}\);/);
 assert.match(codexSource, /C8O\.agentBridge\.codexLoginStart/);
 assert.match(codexSource, /C8O\.agentBridge\.codexLoginStatus/);
 assert.match(codexSource, /authentication\.updatedAt/);
 assert.match(codexSource, /entry\.process\.destroy\(\)/);
 assert.match(codexSource, /appServerStartMs/);
 assert.match(codexSource, /preflightMs/);
+assert.equal(codexRestartThreadId({ codexThreadId: "new-thread", codexHasStartedTurn: false }), "");
+assert.equal(codexRestartThreadId({ codexThreadId: "persisted-thread", codexHasStartedTurn: true }), "persisted-thread");
+const readyMcpStartup = codexMcpStartupStatus({ name: "Convertigo", status: "READY" });
+assert.equal(readyMcpStartup.name, "Convertigo");
+assert.equal(readyMcpStartup.status, "ready");
+assert.equal(readyMcpStartup.error, null);
+assert.equal(readyMcpStartup.failureReason, null);
+assert.match(codexSource, /waitForCodexMcpReady\([\s\S]*managedMcpServerName/);
+assert.match(codexSource, /startupPresenceOnly: true/);
+assert.match(codexSource, /var startupPresenceOnly = boolValue\(options\.startupPresenceOnly, false\)/);
+assert.match(codexSource, /revealModeChanged \? "reveal_mode_changed"/);
+assert.match(codexSource, /if \(skillBundleChanged\) \{[\s\S]*bootstrapCodexHome/);
+assert.doesNotMatch(
+  codexSource.slice(codexSource.indexOf("C8O.agentBridge.codexPrompt = function"), codexSource.indexOf("var latestSkillBundle")),
+  /bootstrapCodexHome/,
+  "an unchanged active conversation must not bootstrap CODEX_HOME again before each prompt"
+);
+const originalDetectCodexRuntimePresence = detectCodexRuntimePresence;
+const originalBootstrapCodexHome = bootstrapCodexHome;
+const originalInstallAgentSkills = installAgentSkills;
+const originalCodexDoctorAuthentication = codexDoctorAuthentication;
+const originalFlowCapabilityAvailable = flowCapabilityAvailable;
+const originalCommandPathStartsWith = commandPathStartsWith;
+const originalDetectCodexRuntime = detectCodexRuntime;
+let presenceChecks = 0;
+detectCodexRuntimePresence = () => {
+  presenceChecks += 1;
+  return {
+    workspaceRoot: "/tmp/workspace",
+    installDir: "/tmp/workspace/agents/codex",
+    codexHome: "/tmp/workspace/agents/codex/home",
+    home: { path: "/tmp/workspace/agents/codex/home", error: "" },
+    mcpEndpoint: "http://localhost:18082/convertigo/api/mcp",
+    codex: { found: true, path: "/tmp/workspace/agents/codex/bin/codex" },
+    playwright: { installed: true },
+    mcp: { ok: true, hasLegacy: true, hasFlow: false, hasManagedServer: true, managedServerName: "convertigo" }
+  };
+};
+bootstrapCodexHome = () => ({ attempted: true, ok: true, authenticationImported: false, generated: [], reused: ["config.toml"] });
+installAgentSkills = () => ({ ok: true, message: "skills current", bundle: { fingerprint: "current" } });
+let startupDoctorForceCheck = null;
+codexDoctorAuthentication = (_options, _home, _command, forceCheck) => {
+  startupDoctorForceCheck = forceCheck;
+  return { configured: true, status: "configured" };
+};
+flowCapabilityAvailable = () => false;
+commandPathStartsWith = () => true;
+detectCodexRuntime = () => { throw new Error("startup must not execute CLI runtime probes"); };
+const presenceSetupResult = C8O.agentBridge.codexSetup({ startupPresenceOnly: true });
+assert.equal(presenceSetupResult.ok, true);
+assert.equal(presenceSetupResult.startupPresenceOnly, true);
+assert.equal(presenceSetupResult.setup.playwright.found, true);
+assert.equal(presenceChecks, 2);
+assert.equal(startupDoctorForceCheck, false);
+assert.equal(presenceSetupResult.timings.totalMs >= 0, true);
+assert.match(codexSource, /setupDetails: setup\.timings \|\| \{\}/);
+detectCodexRuntimePresence = originalDetectCodexRuntimePresence;
+bootstrapCodexHome = originalBootstrapCodexHome;
+installAgentSkills = originalInstallAgentSkills;
+codexDoctorAuthentication = originalCodexDoctorAuthentication;
+flowCapabilityAvailable = originalFlowCapabilityAvailable;
+commandPathStartsWith = originalCommandPathStartsWith;
+detectCodexRuntime = originalDetectCodexRuntime;
+
+const originalEngineProductVersion = engineProductVersion;
+const originalProjectDirectoryByName = projectDirectoryByName;
+let flowProjectLookups = 0;
+engineProductVersion = () => "8.3.9";
+projectDirectoryByName = () => {
+  flowProjectLookups += 1;
+  return null;
+};
+assert.equal(flowCapabilityAvailability().available, false);
+assert.equal(flowProjectLookups, 0, "unsupported Studio versions must not inspect Flow projects");
+assert.match(commonSource, /getAllProjectNamesList\(false\)/);
+engineProductVersion = originalEngineProductVersion;
+projectDirectoryByName = originalProjectDirectoryByName;
 assert.match(commonSource, /Bootstrap is required once per agent conversation/);
 assert.match(commonSource, /already used successfully in the current conversation/);
 assert.match(commonSource, /Common NGX contracts that do not require palette discovery/);
+assert.match(commonSource, /Never recursively search a drive root, user profile, workspace root/);
+assert.match(commonSource, /stateOnly:true, wait:true, timeoutSec:180/);
+assert.match(commonSource, /preserve the complete existing string and every `Begin_c8o_/);
+assert.match(commonSource, /must match `\[A-Za-z_\$\]\[A-Za-z0-9_\$\]\*`/);
 assert.match(commonSource, /optimizeMutations:true/);
 assert.match(commonSource, /Do not inspect `ALL_TOOLS`/);
 assert.equal(resolvePlaywrightMcpCdpEndpoint({ viewerDebugPort: 40811 }), "http://127.0.0.1:40811");
@@ -133,7 +216,7 @@ const managedPreflightPrompt = withManagedGuidancePreflight("User message", {
   mcpEndpoint: "http://localhost:18082/convertigo/api/mcp"
 });
 assert.match(managedPreflightPrompt, /Scoped agent setup status: current/);
-assert.match(managedPreflightPrompt, /2026-08-28\.managed-reveal-v3/);
+assert.match(managedPreflightPrompt, /2026-09-03\.viewer-hydration-v1/);
 assert.match(managedPreflightPrompt, /Do not call `_setupCodex`/);
 const refreshedBundlePrompt = withManagedGuidancePreflight("User message", {
   skillBundle: {
@@ -153,6 +236,11 @@ assert.equal(
 assert.match(commonSource, /MANAGED_SKILL_BUNDLE_STATE_FILE = "managed-skill-bundle\.json"/);
 assert.match(commonSource, /function managedSkillBundleState/);
 assert.match(codexSource, /function recordCodexManagedSkillReads/);
+assert.doesNotMatch(
+  codexSource,
+  /!entry\.sessionId\.length[\s\S]{0,300}acknowledgeManagedSkillBundle/,
+  "a fresh conversation must acknowledge managed skills only after observed reads"
+);
 assert.match(codexSource, /reason: "skill_bundle_changed"/);
 assert.deepEqual(
   codexManagedSkillReadSlugs("/bin/zsh -lc sed -n '1,240p' /tmp/codex-home/skills/convertigo-flow-frontend-svelte/SKILL.md"),
@@ -173,7 +261,7 @@ assert.equal(
 );
 assert.equal(
   vibeMcpTransportEndpoint("http://localhost:18082/convertigo/api/mcp?transport=managed&jsonOnly=true#viewer"),
-  "http://localhost:18082/convertigo/api/mcp?transport=managed&jsonOnly=false&descriptorVersion=2026-08-28.managed-reveal-v3#viewer"
+  "http://localhost:18082/convertigo/api/mcp?transport=managed&jsonOnly=false&descriptorVersion=2026-09-03.viewer-hydration-v1#viewer"
 );
 const compactCodexConfig = patchCodexMcpConfigText(
   "",
@@ -198,6 +286,30 @@ const refreshedSessionCodexConfig = patchCodexMcpConfigText(
 );
 assert.match(refreshedSessionCodexConfig.text, /"Cookie" = "JSESSIONID=session-two"/);
 assert.doesNotMatch(refreshedSessionCodexConfig.text, /JSESSIONID=session-one/);
+const mixedHeaderCodexConfig = patchCodexMcpConfigText(
+  [
+    "[mcp_servers.convertigo]",
+    'url = "http://localhost:18082/convertigo/api/mcp?jsonOnly=true"',
+    'http_headers = { "X-Convertigo-Guidance-Version" = "old", "Cookie" = "JSESSIONID=inline-session" }',
+    "",
+    "[mcp_servers.convertigo.http_headers]",
+    '"X-Convertigo-Viewer-Debug-Port" = "40457"',
+    '"Cookie" = "JSESSIONID=nested-session"',
+    ""
+  ].join("\n"),
+  "http://localhost:18082/convertigo/api/mcp",
+  { viewerDebugPort: 40457, mcpSessionCookie: "JSESSIONID=refreshed-session" },
+  "/tmp/codex-home"
+);
+assert.doesNotMatch(mixedHeaderCodexConfig.text, /\[mcp_servers\.convertigo\.http_headers\]/);
+assert.equal((mixedHeaderCodexConfig.text.match(/^http_headers\s*=/gm) || []).length, 1);
+assert.match(mixedHeaderCodexConfig.text, /"X-Convertigo-Viewer-Debug-Port" = "40457"/);
+assert.match(mixedHeaderCodexConfig.text, /"Cookie" = "JSESSIONID=refreshed-session"/);
+assert.equal((mixedHeaderCodexConfig.text.match(/The Studio JxBrowser CDP endpoint is written here/g) || []).length, 1);
+assert.equal(mcpSessionCookieFromConfig(
+  '[mcp_servers.convertigo.http_headers]\nCookie = "JSESSIONID=nested-session"\n',
+  "convertigo"
+), "JSESSIONID=nested-session");
 const revealCodexConfig = patchCodexMcpConfigText(
   compactCodexConfig.text,
   "http://localhost:18082/convertigo/api/mcp",
@@ -244,7 +356,7 @@ const managedTokenEnvironment = applyManagedMcpEnvironment({}, {
 assert.equal(managedTokenEnvironment.CONVERTIGO_MCP_TOKEN, "shared-jwt");
 assert.equal(
   buildMcpServers("http://localhost:18082/convertigo/api/mcp")[0].url,
-  "http://localhost:18082/convertigo/api/mcp?jsonOnly=false&descriptorVersion=2026-08-28.managed-reveal-v3"
+  "http://localhost:18082/convertigo/api/mcp?jsonOnly=false&descriptorVersion=2026-09-03.viewer-hydration-v1"
 );
 
 const pythonSpec = pythonRuntimeSpec({
