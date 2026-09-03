@@ -1917,10 +1917,7 @@
     if (setup.setup.codexHome.length) {
       env.CODEX_HOME = setup.setup.codexHome;
     }
-    var mcpToken = managedMcpBearerToken(options);
-    if (mcpToken.length) {
-      env[mcpBearerTokenEnv(options)] = mcpToken;
-    }
+    applyManagedMcpEnvironment(env, options);
     var nodePath = nodeRuntimeSearchPath(options);
     if (nodePath.length) {
       env.PATH = nodePath + String(File.pathSeparator) + (env.PATH || String(System.getenv("PATH") || ""));

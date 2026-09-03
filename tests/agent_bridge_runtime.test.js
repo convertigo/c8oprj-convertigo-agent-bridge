@@ -223,7 +223,23 @@ const flowCodexConfig = patchCodexMcpConfigText(
 );
 assert.match(flowCodexConfig.text, /\[mcp_servers\.convertigo-flow\]/);
 assert.match(flowCodexConfig.text, /url = "http:\/\/localhost:18082\/convertigo\/api\/flow-mcp\?jsonOnly=true"/);
+assert.match(flowCodexConfig.text, /bearer_token_env_var = "CONVERTIGO_FLOW_MCP_TOKEN"/);
 assert.match(flowCodexConfig.text, /\[mcp_servers\.convertigo\]/);
+const tokenBundle = JSON.stringify({ legacy: "legacy-jwt", flow: "flow-jwt" });
+assert.deepEqual(
+  managedMcpBearerTokens({ agentProfile: "generalist", mcpBearerToken: tokenBundle }),
+  { nocode: "", legacy: "legacy-jwt", flow: "flow-jwt" }
+);
+assert.equal(
+  managedMcpBearerToken({ agentProfile: "flow", mcpBearerToken: tokenBundle }),
+  "flow-jwt"
+);
+const managedTokenEnvironment = applyManagedMcpEnvironment({}, {
+  agentProfile: "flow",
+  mcpBearerToken: tokenBundle
+});
+assert.equal(managedTokenEnvironment.CONVERTIGO_MCP_TOKEN, "legacy-jwt");
+assert.equal(managedTokenEnvironment.CONVERTIGO_FLOW_MCP_TOKEN, "flow-jwt");
 assert.equal(
   buildMcpServers("http://localhost:18082/convertigo/api/mcp")[0].url,
   "http://localhost:18082/convertigo/api/mcp?jsonOnly=false&descriptorVersion=2026-08-28.managed-reveal-v3"

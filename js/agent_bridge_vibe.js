@@ -322,10 +322,7 @@
     if (vibeHome.length) {
       env.VIBE_HOME = vibeHome;
     }
-    var mcpToken = managedMcpBearerToken(options);
-    if (mcpToken.length) {
-      env[mcpBearerTokenEnv(options)] = mcpToken;
-    }
+    applyManagedMcpEnvironment(env, options);
     var cwd = normalizeDirectory(options.cwd, setup.setup.workspaceRoot, setup.setup.workspaceRoot);
     var mcpEndpoint = trim(options.mcpEndpoint) || setup.setup.mcpEndpoint || resolveMcpEndpoint(options);
     var command = parseCommand(options.command, [setup.setup.vibeAcp.path || "vibe-acp"]);

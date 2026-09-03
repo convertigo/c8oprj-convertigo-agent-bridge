@@ -131,6 +131,11 @@ same context.
   store, inject it as `CONVERTIGO_MCP_TOKEN`, and configure Codex or Vibe to
   derive the Authorization bearer header from that environment variable. Never
   persist or return the raw token.
+- That opaque handle may contain a JSON bundle with independent Legacy and Flow
+  tokens. Inject the Flow secret as `CONVERTIGO_FLOW_MCP_TOKEN` and configure
+  the `convertigo-flow` MCP entry with that variable. Keep accepting a single
+  legacy handle value for compatibility, and fingerprint the complete bundle
+  when deciding whether a resident agent process must restart.
 - Experimental Flow support stays on the private `codex/flow-agent-profile`
   branch. The Studio user has one Codex home containing both the Legacy and
   Flow MCP servers. `lib_ConvertigoMCP._setupCodex` owns the Legacy skill pack and
