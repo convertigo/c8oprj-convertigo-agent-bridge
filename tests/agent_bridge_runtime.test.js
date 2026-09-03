@@ -118,9 +118,7 @@ assert.match(commonSource, /Do not inspect `ALL_TOOLS`/);
 assert.equal(resolvePlaywrightMcpCdpEndpoint({ viewerDebugPort: 40811 }), "http://127.0.0.1:40811");
 
 const revealModePrompt = withRevealModePrompt("Build a Flow frontend", true);
-assert.match(revealModePrompt, /pass `reveal:true` to `code-set` or `code-patch`/);
-assert.match(revealModePrompt, /`actionId:"dev\.open"`/);
-assert.match(revealModePrompt, /`browserControlReady:true`/);
+assert.doesNotMatch(withRevealModePrompt("Build an application", true), /\bFlow\b|convertigo-flow/i);
 assert.match(commonSource, /Convertigo project descriptors are MCP-owned/);
 
 const revealPrompt = withRevealModePrompt("User message", true);
@@ -211,6 +209,12 @@ assert.doesNotMatch(
   patchCodexMcpConfigText(revealCodexConfig.text, "http://localhost:18082/convertigo/api/mcp", {}, "/tmp/codex-home").text,
   /X-Convertigo-Reveal-Mode/
 );
+assert.equal(agentCapabilityProfile({ agentProfile: "flow", userId: "studio" }).id, "generalist");
+flowCapabilityAvailability = () => ({ available: true });
+const flowRevealModePrompt = withRevealModePrompt("Build a Flow frontend", true);
+assert.match(flowRevealModePrompt, /pass `reveal:true` to `code-set` or `code-patch`/);
+assert.match(flowRevealModePrompt, /`actionId:"dev\.open"`/);
+assert.match(flowRevealModePrompt, /`browserControlReady:true`/);
 const flowProfile = agentCapabilityProfile({ agentProfile: "flow", userId: "studio" });
 assert.equal(flowProfile.id, "flow");
 assert.equal(flowProfile.mcpServerName, "convertigo-flow");

@@ -1668,11 +1668,13 @@
     var capabilityProfile = agentCapabilityProfile(options);
     var mcpReady = capabilityProfile.id === "nocode"
       ? setup.mcp.hasManagedServer === true
-      : setup.mcp.hasLegacy === true && setup.mcp.hasFlow === true;
+      : setup.mcp.hasLegacy === true && (!flowCapabilityAvailable() || setup.mcp.hasFlow === true);
     if (setup.codex.found && !mcpReady) {
       messages.push(capabilityProfile.id === "nocode"
         ? "Codex does not list the Convertigo NoCode MCP server after setup."
-        : "Codex does not list both Convertigo Legacy and Flow MCP servers after setup.");
+        : (flowCapabilityAvailable()
+          ? "Codex does not list both Convertigo Legacy and Flow MCP servers after setup."
+          : "Codex does not list the Convertigo MCP server after setup."));
     }
     var managedCodex = setup.codex.found && commandPathStartsWith(setup.codex, setup.installDir);
     var playwrightRequired = managedCodex && !boolValue(options.skipCodexPlaywrightInstall || options.skipPlaywrightInstall, false);

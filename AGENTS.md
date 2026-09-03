@@ -141,6 +141,11 @@ same context.
   `lib_flow_mcp._setupCodex` owns the Flow pack; AgentBridge adds only the small
   routing skill. Legacy/Flow profiles are routing hints and conversation
   metadata, never home or history boundaries.
+- Treat Flow as an alpha capability, not as baseline Convertigo vocabulary.
+  Expose its profile, prompts, skills, MCP entry, and setup requirements only
+  when the running engine is at least 8.4.0 and both `lib_flow_engine` and
+  `lib_flow_mcp` are loaded. Otherwise Studio setup and user-facing guidance
+  must remain standard Convertigo-only and must not mention Flow.
 - Keep `assistantSurface` independent from authoring routing. A value such as
   `studio` describes the host UI and must never silently select Legacy.
 - A non-`studio` Assistant user is a NoCode identity. It must be forced to the

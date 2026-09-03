@@ -100,10 +100,17 @@ public. Rebase these branches regularly on their 8.4.4 parent branches. Resolve
 conflicts by preserving generic bridge contracts first and keep Flow-specific
 knowledge in `lib_flow_mcp`.
 
+Flow is an alpha capability and is available only when the running Convertigo
+version is at least 8.4.0 and both `lib_flow_engine` and `lib_flow_mcp` are
+loaded. When either condition is false, public capability descriptors, managed
+setup output, prompts, skills, and MCP configuration must remain standard
+Convertigo-only and must not mention or require Flow.
+
 Validation before rebasing or merging:
 
-1. The `studio` setup installs both MCP servers and the routing skill in one
-   home, without `convertigo-nocode`.
+1. An eligible `studio` setup installs both MCP servers and the routing skill in
+   one home, without `convertigo-nocode`; an ineligible setup installs only the
+   standard Convertigo capability and contains no Flow-facing guidance.
 2. Explicit Flow and Legacy intents route to the matching owner without changing
    conversation identity or history.
 3. Non-`studio` identities remain NoCode even if a low-code profile or Studio
