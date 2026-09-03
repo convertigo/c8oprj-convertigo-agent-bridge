@@ -17,7 +17,6 @@
   var MAX_EVENT_BUFFER = 5000;
   var NOCODE_MCP_TOKEN_ENV = "C8O_NOCODE_MCP_TOKEN";
   var MCP_TOKEN_ENV = "CONVERTIGO_MCP_TOKEN";
-  var FLOW_MCP_TOKEN_ENV = "CONVERTIGO_FLOW_MCP_TOKEN";
   var MCP_GUIDANCE_VERSION = "2026-08-28.managed-reveal-v3";
   var STUDIO_ROUTER_SKILL_SLUG = "convertigo-studio";
   var MANAGED_SKILL_BUNDLE_STATE_FILE = "managed-skill-bundle.json";
@@ -1503,49 +1502,29 @@
     return noCodeMcpBearerTokenFromFile(options);
   }
 
-  function managedMcpBearerTokens(options) {
+  function managedMcpBearerToken(options) {
     options = options || {};
     if (normalizeSkillProfile(options) === "nocode") {
-      return { nocode: noCodeMcpBearerToken(options), legacy: "", flow: "" };
+      return noCodeMcpBearerToken(options);
     }
     var direct = trim(options.mcpBearerToken);
     var stored = direct.length ? direct : serverSecretGet(options.mcpBearerTokenHandle);
-    if (!stored.length) {
-      return { nocode: "", legacy: "", flow: "" };
-    }
     try {
-      var bundle = JSON.parse(stored);
-      if (bundle && typeof bundle === "object") {
-        return {
-          nocode: "",
-          legacy: trim(bundle.legacy || bundle.mcp),
-          flow: trim(bundle.flow || bundle.flowMcp)
-        };
+      var previousBundle = JSON.parse(stored);
+      if (previousBundle && typeof previousBundle === "object") {
+        return trim(previousBundle.legacy || previousBundle.mcp || previousBundle.flow || previousBundle.flowMcp);
       }
-    } catch (_notTokenBundle) {}
-    if (normalizeSkillProfile(options) === "flow") {
-      return { nocode: "", legacy: "", flow: stored };
-    }
-    return { nocode: "", legacy: stored, flow: "" };
-  }
-
-  function managedMcpBearerToken(options) {
-    var tokens = managedMcpBearerTokens(options);
-    if (normalizeSkillProfile(options || {}) === "nocode") {
-      return tokens.nocode;
-    }
-    return normalizeSkillProfile(options || {}) === "flow" ? tokens.flow : tokens.legacy;
+    } catch (_notPreviousTokenBundle) {}
+    return stored;
   }
 
   function mcpBearerTokenEnv(options) {
-    var profile = normalizeSkillProfile(options || {});
-    return profile === "nocode" ? NOCODE_MCP_TOKEN_ENV : (profile === "flow" ? FLOW_MCP_TOKEN_ENV : MCP_TOKEN_ENV);
+    return normalizeSkillProfile(options || {}) === "nocode" ? NOCODE_MCP_TOKEN_ENV : MCP_TOKEN_ENV;
   }
 
   function mcpBearerTokenFingerprint(options) {
-    var tokens = managedMcpBearerTokens(options || {});
-    var material = [tokens.nocode, tokens.legacy, tokens.flow].join("\n");
-    return material.replace(/\n/g, "").length ? hashShort(material) : "";
+    var token = managedMcpBearerToken(options || {});
+    return token.length ? hashShort(token) : "";
   }
 
   function usesProtectedConvertigoMcp(mcpEndpoint, options) {
@@ -1553,15 +1532,9 @@
   }
 
   function applyManagedMcpEnvironment(env, options) {
-    var tokens = managedMcpBearerTokens(options || {});
-    if (tokens.nocode.length) {
-      env[NOCODE_MCP_TOKEN_ENV] = tokens.nocode;
-    }
-    if (tokens.legacy.length) {
-      env[MCP_TOKEN_ENV] = tokens.legacy;
-    }
-    if (tokens.flow.length) {
-      env[FLOW_MCP_TOKEN_ENV] = tokens.flow;
+    var token = managedMcpBearerToken(options || {});
+    if (token.length) {
+      env[mcpBearerTokenEnv(options)] = token;
     }
     return env;
   }
