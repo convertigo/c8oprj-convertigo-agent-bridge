@@ -28,12 +28,27 @@ global.C8O = { agentBridge: {} };
 
 const commonSource = fs.readFileSync("js/agent_bridge_common.js", "utf8");
 const codexSource = fs.readFileSync("js/agent_bridge_codex.js", "utf8");
+const vibeSource = fs.readFileSync("js/agent_bridge_vibe.js", "utf8");
+assert.doesNotMatch(commonSource + vibeSource, /ensureManagedVibeModelPresets|appendManagedVibeModelPresets/);
 vm.runInThisContext(commonSource, {
   filename: "agent_bridge_common.js"
 });
 vm.runInThisContext(codexSource, {
   filename: "agent_bridge_codex.js"
 });
+
+const processBuilderSource = commonSource.match(/function runProcessBuilder\(pb, options\) \{[\s\S]*?\n  \}/);
+assert.ok(processBuilderSource, "runProcessBuilder must remain present");
+assert.ok(
+  processBuilderSource[0].indexOf("pb.redirectOutput(outFile)") < processBuilderSource[0].indexOf("process.waitFor("),
+  "process output must be redirected before waiting so verbose installers cannot block on full pipes"
+);
+const commandSource = commonSource.match(/function runCommand\(args, options\) \{[\s\S]*?\n  \}/);
+assert.ok(commandSource, "runCommand must remain present");
+assert.ok(
+  commandSource[0].indexOf("pb.redirectOutput(outFile)") < commandSource[0].indexOf("process.waitFor("),
+  "command output must be redirected before waiting"
+);
 
 const compactFailure = compactCommandResult({
   command: "python -m pip install mistral-vibe",
@@ -168,6 +183,25 @@ assert.equal(presenceChecks, 2);
 assert.equal(startupDoctorForceCheck, false);
 assert.equal(presenceSetupResult.timings.totalMs >= 0, true);
 assert.match(codexSource, /setupDetails: setup\.timings \|\| \{\}/);
+assert.match(vibeSource, /startupPresenceOnly: true/);
+assert.match(vibeSource, /buildMcpServers\(mcpEndpoint, options\)/);
+assert.match(vibeSource, /status: ready \? "ready" : \(!skillsReady \? "configuration_error"/);
+assert.match(commonSource, /callLocalSequence\(setupProject, "_setupVibe"/);
+assert.match(commonSource, /skills\/convertigo-vibe-generalist\/SKILL\.md/);
+const setupVibeResult = findSetupVibeResult({
+  document: {
+    setupVibeResult: {
+      skillStatus: "created",
+      resolvedVibeHome: "/tmp/vibe-home",
+      skillPath: "/tmp/vibe-home/skills/convertigo-vibe-generalist/SKILL.md"
+    }
+  }
+}, 0);
+assert.equal(setupVibeResult.skillStatus, "created");
+assert.match(agentSkillInstructions("vibe", "generalist"), /skills\/convertigo-vibe-generalist\/SKILL\.md/);
+assert.doesNotMatch(agentSkillInstructions("vibe", "generalist"), /skills\/convertigo-mcp\/AGENT\.md/);
+assert.match(agentSkillInstructions("vibe", "generalist"), /exactly one Convertigo MCP tool call per assistant message/);
+assert.match(agentSkillInstructions("vibe", "generalist"), /Do not wait with shell `sleep`/);
 detectCodexRuntimePresence = originalDetectCodexRuntimePresence;
 bootstrapCodexHome = originalBootstrapCodexHome;
 installAgentSkills = originalInstallAgentSkills;
@@ -216,7 +250,7 @@ const managedPreflightPrompt = withManagedGuidancePreflight("User message", {
   mcpEndpoint: "http://localhost:18082/convertigo/api/mcp"
 });
 assert.match(managedPreflightPrompt, /Scoped agent setup status: current/);
-assert.match(managedPreflightPrompt, /2026-09-03\.viewer-hydration-v1/);
+assert.match(managedPreflightPrompt, /2026-09-04\.vibe-serial-transport-v1/);
 assert.match(managedPreflightPrompt, /Do not call `_setupCodex`/);
 const refreshedBundlePrompt = withManagedGuidancePreflight("User message", {
   skillBundle: {
@@ -261,7 +295,7 @@ assert.equal(
 );
 assert.equal(
   vibeMcpTransportEndpoint("http://localhost:18082/convertigo/api/mcp?transport=managed&jsonOnly=true#viewer"),
-  "http://localhost:18082/convertigo/api/mcp?transport=managed&jsonOnly=false&descriptorVersion=2026-09-03.viewer-hydration-v1#viewer"
+  "http://localhost:18082/convertigo/api/mcp?transport=managed&jsonOnly=false&descriptorVersion=2026-09-04.vibe-serial-transport-v1#viewer"
 );
 const compactCodexConfig = patchCodexMcpConfigText(
   "",
@@ -356,7 +390,17 @@ const managedTokenEnvironment = applyManagedMcpEnvironment({}, {
 assert.equal(managedTokenEnvironment.CONVERTIGO_MCP_TOKEN, "shared-jwt");
 assert.equal(
   buildMcpServers("http://localhost:18082/convertigo/api/mcp")[0].url,
-  "http://localhost:18082/convertigo/api/mcp?jsonOnly=false&descriptorVersion=2026-09-03.viewer-hydration-v1"
+  "http://localhost:18082/convertigo/api/mcp?jsonOnly=false&descriptorVersion=2026-09-04.vibe-serial-transport-v1"
+);
+assert.deepEqual(
+  buildMcpServers("http://localhost:18082/convertigo/api/mcp", { mcpBearerToken: "managed-jwt" })[0].headers,
+  [{ name: "Authorization", value: "Bearer managed-jwt" }]
+);
+assert.deepEqual(buildMcpServers("http://localhost:18082/convertigo/api/mcp")[0].headers, []);
+assert.deepEqual(
+  buildMcpServers("https://example.test/unrelated-mcp", { mcpBearerToken: "managed-jwt" })[0].headers,
+  [],
+  "the managed Convertigo token must not be forwarded to unrelated endpoints"
 );
 
 const pythonSpec = pythonRuntimeSpec({
@@ -401,7 +445,7 @@ assert.equal(vibeProvider.models[1].defaultReasoning, "high");
 assert.equal(vibeProvider.reasoningMode, "runtime_selectable");
 assert.equal(vibeProvider.supports.reasoning, true);
 
-const vibeConfigWithPreset = appendManagedVibeModelPresets([
+const vibeConfigWithPreset = [
   'active_model = "vibe-thinking"',
   "",
   "[[models]]",
@@ -411,13 +455,32 @@ const vibeConfigWithPreset = appendManagedVibeModelPresets([
   "",
   "[[mcp_servers]]",
   'name = "Convertigo"'
-].join("\n"));
+].join("\n");
+const unchangedVibeConfig = migrateManagedVibeModelPresets(vibeConfigWithPreset);
+assert.deepEqual(unchangedVibeConfig.removed, []);
+assert.equal(unchangedVibeConfig.text, vibeConfigWithPreset);
 
-assert.deepEqual(vibeConfigWithPreset.added, ["zai-glm-5-2"]);
-assert.match(vibeConfigWithPreset.text, /name = "zai-glm-5-2"/);
-assert.match(vibeConfigWithPreset.text, /input_price = 1\.4/);
-assert.ok(vibeConfigWithPreset.text.indexOf('alias = "zai-glm-5-2"') < vibeConfigWithPreset.text.indexOf("[[mcp_servers]]"));
-assert.deepEqual(appendManagedVibeModelPresets(vibeConfigWithPreset.text).added, []);
+const migratedVibeConfig = migrateManagedVibeModelPresets([
+  'active_model = "zai-glm-5-2"',
+  "",
+  "[[models]]",
+  'name = "zai-glm-5-2"',
+  'provider = "mistral"',
+  'alias = "zai-glm-5-2"',
+  "input_price = 1.4",
+  "output_price = 4.4",
+  'thinking = "high"',
+  "",
+  "[[mcp_servers]]",
+  'name = "Convertigo"'
+].join("\n"));
+assert.deepEqual(migratedVibeConfig.removed, ["zai-glm-5-2"]);
+assert.equal(migratedVibeConfig.migratedActiveModel, true);
+assert.match(migratedVibeConfig.text, /active_model = "glm-5-2"/);
+assert.doesNotMatch(migratedVibeConfig.text, /alias = "zai-glm-5-2"/);
+assert.match(migratedVibeConfig.text, /\[\[mcp_servers\]\]/);
+assert.equal(vibeModelSpec("zai-glm-5-2").activeModel, "glm-5-2");
+assert.equal(vibeModelSpec("glm-5-2").builtIn, true);
 
 const uncachedProvider = requireCachedProviderConfiguration({
   id: "codex",

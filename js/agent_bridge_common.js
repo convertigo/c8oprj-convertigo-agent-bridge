@@ -17,7 +17,7 @@
   var MAX_EVENT_BUFFER = 5000;
   var NOCODE_MCP_TOKEN_ENV = "C8O_NOCODE_MCP_TOKEN";
   var MCP_TOKEN_ENV = "CONVERTIGO_MCP_TOKEN";
-  var MCP_GUIDANCE_VERSION = "2026-09-03.viewer-hydration-v1";
+  var MCP_GUIDANCE_VERSION = "2026-09-04.vibe-serial-transport-v1";
   var STUDIO_ROUTER_SKILL_SLUG = "convertigo-studio";
   var MANAGED_SKILL_BUNDLE_STATE_FILE = "managed-skill-bundle.json";
   var FLOW_MINIMUM_CONVERTIGO_VERSION = "8.4.0";
@@ -1074,6 +1074,107 @@
     return null;
   }
 
+  function findSetupVibeResult(value, depth) {
+    if (value === null || typeof value === "undefined" || typeof value !== "object" || depth > 8) {
+      return null;
+    }
+    if (Object.prototype.hasOwnProperty.call(value, "skillStatus") &&
+        (Object.prototype.hasOwnProperty.call(value, "resolvedVibeHome") || Object.prototype.hasOwnProperty.call(value, "skillPath"))) {
+      return value;
+    }
+    var preferred = ["setupVibeResult", "result", "document", "doc", "payload", "response"];
+    for (var i = 0; i < preferred.length; i++) {
+      if (Object.prototype.hasOwnProperty.call(value, preferred[i])) {
+        var found = findSetupVibeResult(value[preferred[i]], depth + 1);
+        if (found !== null) {
+          return found;
+        }
+      }
+    }
+    for (var key in value) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        var nested = value[key];
+        if (nested !== null && typeof nested === "object") {
+          var nestedFound = findSetupVibeResult(nested, depth + 1);
+          if (nestedFound !== null) {
+            return nestedFound;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  function setupVibeFromMcpProject(options, vibeHome, mcpEndpoint) {
+    var setupProject = "lib_ConvertigoMCP";
+    var report = {
+      attempted: false,
+      ok: false,
+      provider: "vibe",
+      source: setupProject + "._setupVibe",
+      target: filePath(vibeHome),
+      copied: [],
+      generated: [],
+      reused: [],
+      warnings: [],
+      skillStatus: "",
+      agentsStatus: "",
+      configStatus: "",
+      resolvedVibeHome: filePath(vibeHome),
+      resolvedMcpUrl: trim(mcpEndpoint) || resolveMcpEndpoint(options),
+      skillPath: "",
+      skipped: false,
+      message: "",
+      error: ""
+    };
+    if (projectDirectoryByName(setupProject) === null) {
+      report.skipped = true;
+      report.error = setupProject + " project not loaded";
+      report.message = "Required capability project not loaded: " + setupProject;
+      return report;
+    }
+    report.attempted = true;
+    try {
+      var response = callLocalSequence(setupProject, "_setupVibe", {
+        vibeHome: report.resolvedVibeHome,
+        mcpUrl: report.resolvedMcpUrl,
+        dryRun: boolValue(options && options.dryRun, false) ? "true" : "false",
+        replaceConfig: "false"
+      });
+      var result = findSetupVibeResult(response, 0);
+      if (result === null) {
+        throw new Error(setupProject + "._setupVibe did not return a setup result");
+      }
+      report.ok = true;
+      report.skillStatus = trim(result.skillStatus) || "unknown";
+      report.agentsStatus = trim(result.agentsStatus) || "unknown";
+      report.configStatus = trim(result.configStatus) || "unknown";
+      report.resolvedVibeHome = trim(result.resolvedVibeHome) || report.resolvedVibeHome;
+      report.resolvedMcpUrl = trim(result.resolvedMcpUrl) || report.resolvedMcpUrl;
+      report.skillPath = trim(result.skillPath);
+      report.target = report.resolvedVibeHome;
+      if (result.warnings && typeof result.warnings.length !== "undefined") {
+        for (var i = 0; i < result.warnings.length; i++) {
+          var warning = trim(result.warnings[i]);
+          if (warning.length) {
+            report.warnings.push(warning);
+          }
+        }
+      }
+      var skillEntry = "skills/convertigo-vibe-generalist/SKILL.md";
+      if (report.skillStatus === "unchanged") {
+        report.reused.push(skillEntry);
+      } else {
+        report.generated.push(skillEntry);
+      }
+      report.message = "Convertigo Vibe skill synchronized from " + setupProject + "._setupVibe";
+    } catch (e) {
+      report.error = String(e);
+      report.message = "Unable to synchronize from " + setupProject + "._setupVibe";
+    }
+    return report;
+  }
+
   function setupCodexFromMcpProject(options, codexHome, mcpEndpoint, profile) {
     var capabilityProfile = agentCapabilityProfile({ agentProfile: profile });
     var skillKey = capabilityProfile.setupSkillKey;
@@ -1477,6 +1578,7 @@
     var capabilityProfile = agentCapabilityProfile({ agentProfile: profile });
     var isNoCode = capabilityProfile.id === "nocode";
     var isFlow = capabilityProfile.id === "flow";
+    var isVibe = normalizeProvider(provider) === "vibe";
     return [
       "# Convertigo Agent Instructions",
       "",
@@ -1497,6 +1599,8 @@
       isFlow ? "- If Playwright is unavailable, disabled, still on `about:blank`, or attached to another endpoint, report the host configuration problem instead of bypassing it." : "- If `mobile-builder-open` reports `browserControlReady:true` but the Playwright/browser-control MCP tools are unavailable, disabled, still on `about:blank`, or attached to another endpoint, report the configuration problem to the user instead of bypassing it with Node scripts, raw CDP WebSocket code, or a new browser.",
       "- If a prompt says Convertigo runtime reveal mode is enabled, pass `reveal:true` only on supported Convertigo mutation/viewer tools that should visibly move Studio or No Code Studio; do not add it to read-only calls.",
       isFlow ? "- Keep viewer starts and synchronization asynchronous until the final acceptance proof." : "- For `mobile-builder-open`, use `wait:false` for reveal/focus polls; reserve long `wait:true` calls for readiness proof and omit `reveal` unless the user specifically needs UI focus.",
+      isVibe ? "- Treat the Convertigo MCP transport as serial: issue exactly one Convertigo MCP tool call per assistant message, including reads. Never group Convertigo tool calls in one response." : "",
+      isVibe ? "- Do not wait with shell `sleep` or PowerShell delays. After one asynchronous builder launch and useful mutations, use one serial waited `mobile-builder-open` readiness call with a sufficient timeout." : "",
       "- If those mutations are grouped with `batch-call`, pass top-level `reveal:true`; the batch reveals the final touched object after its deferred refresh.",
       isNoCode ? "- You are in the C8Oforms / No-Code Studio surface, not in Eclipse Studio. A selected Convertigo project is optional in this surface." : "- Work on the selected project unless the user explicitly asks for another project.",
       isNoCode ? "" : "- If no project is selected and the user explicitly asks to create a new project or application, derive a concise valid technical name when needed, check for collisions through Convertigo MCP, and proceed without asking for a project selection.",
@@ -1511,8 +1615,8 @@
       "- When you change a project, validate the result with the available Convertigo tools before claiming completion.",
       isNoCode ? "- Keep the user-facing vocabulary no-code oriented: forms, applications, pages, fields, data sources, roles, publication, and permissions." : "",
       "",
-      isFlow ? "The managed Flow skill is available in `skills/" + capabilityProfile.skillSlug + "/SKILL.md`. Use its resources instead of the legacy Convertigo knowledge pack." : "The synchronized Convertigo MCP knowledge pack is available in `skills/convertigo-mcp/`.",
-      isFlow ? "For delegated work, reuse the persistent backend and frontend specialists described by that skill rather than spawning a new agent per lot." : "Start with `skills/convertigo-mcp/AGENT.md` and `skills/convertigo-mcp/TOOLS.md`, then read only the prompt or resource files relevant to the task.",
+      isFlow ? "The managed Flow skill is available in `skills/" + capabilityProfile.skillSlug + "/SKILL.md`. Use its resources instead of the legacy Convertigo knowledge pack." : (isVibe ? "The managed Vibe skill is available in `skills/convertigo-vibe-generalist/SKILL.md`." : "The synchronized Convertigo MCP knowledge pack is available in `skills/convertigo-mcp/`."),
+      isFlow ? "For delegated work, reuse the persistent backend and frontend specialists described by that skill rather than spawning a new agent per lot." : (isVibe ? "Start with `skills/convertigo-vibe-generalist/SKILL.md`, then read only the exact MCP guide required by the task." : "Start with `skills/convertigo-mcp/AGENT.md` and `skills/convertigo-mcp/TOOLS.md`, then read only the prompt or resource files relevant to the task."),
       isNoCode ? "The managed NoCode skill is available in `skills/convertigo-nocode/SKILL.md` and should be preferred for this surface." : "",
       "",
       "Provider: " + providerLabel(provider)
@@ -2915,40 +3019,26 @@
       report.message = "Using the default agent home; skill synchronization skipped";
       return report;
     }
+    if (profile !== "nocode") {
+      return setupVibeFromMcpProject(options, new File(home), resolveMcpEndpoint(options));
+    }
     report.attempted = true;
     try {
-      var source = mcpSkillSourceCandidate(options);
-      if (!isMcpSkillSource(source)) {
-        report.ok = false;
-        report.skipped = true;
-        report.message = "lib_ConvertigoMCP skill source not found";
-        return report;
-      }
       var homeDir = new File(home);
       ensureDirectory(homeDir);
-      var target = new File(new File(homeDir, "skills"), "convertigo-mcp");
-      ensureDirectory(target);
-      report.source = filePath(source);
-      report.target = filePath(target);
-      copySkillTree(source, target, "AGENT.md", report);
-      copySkillTree(source, target, "TOOLS.md", report);
-      copySkillTree(source, target, "prompts", report);
-      copySkillTree(source, target, "resources", report);
-      if (profile === "nocode") {
-        var noCodeSkillFile = new File(new File(new File(homeDir, "skills"), "convertigo-nocode"), "SKILL.md");
-        var noCodeSkill = managedSkillContent(options, profile, resolveMcpEndpoint(options));
-        var noCodeWrite = writeManagedTextFile(noCodeSkillFile, noCodeSkill.content, false);
-        if (noCodeWrite.status === "unchanged") {
-          report.reused.push("skills/convertigo-nocode/SKILL.md");
-        } else if (noCodeSkill.copied === true) {
-          report.copied.push("skills/convertigo-nocode/SKILL.md");
-        } else {
-          report.generated.push("skills/convertigo-nocode/SKILL.md");
-        }
+      var noCodeSkillFile = new File(new File(new File(homeDir, "skills"), "convertigo-nocode"), "SKILL.md");
+      var noCodeSkill = managedSkillContent(options, profile, resolveMcpEndpoint(options));
+      var noCodeWrite = writeManagedTextFile(noCodeSkillFile, noCodeSkill.content, false);
+      if (noCodeWrite.status === "unchanged") {
+        report.reused.push("skills/convertigo-nocode/SKILL.md");
+      } else if (noCodeSkill.copied === true) {
+        report.copied.push("skills/convertigo-nocode/SKILL.md");
+      } else {
+        report.generated.push("skills/convertigo-nocode/SKILL.md");
       }
       writeTextFile(new File(homeDir, "AGENTS.md"), agentSkillInstructions(provider, profile));
       report.generated.push("AGENTS.md");
-      report.message = profile === "nocode" ? "Convertigo NoCode skills synchronized" : "Convertigo MCP skills synchronized";
+      report.message = "Convertigo NoCode skills synchronized";
     } catch (e) {
       report.ok = false;
       report.error = String(e);
@@ -4375,6 +4465,8 @@
       ok: false,
       error: ""
     };
+    var outFile = null;
+    var errFile = null;
     try {
       var pb = new ProcessBuilder(toJavaList(args));
       applyEngineProxyEnvironment(pb.environment(), options && options.proxyTargetUrl);
@@ -4384,9 +4476,11 @@
       if (options && options.env) {
         envObjectToMap(pb.environment(), options.env);
       }
+      outFile = File.createTempFile("c8o-agent-bridge-out-", ".log");
+      errFile = File.createTempFile("c8o-agent-bridge-err-", ".log");
+      pb.redirectOutput(outFile);
+      pb.redirectError(errFile);
       var process = pb.start();
-      var outReader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
-      var errReader = new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8));
       var finished = process.waitFor(options && options.timeoutMs ? options.timeoutMs : 15000, TimeUnit.MILLISECONDS);
       if (!finished) {
         process.destroyForcibly();
@@ -4398,11 +4492,14 @@
       } catch (_ignoreExitValue) {
         result.exitCode = -1;
       }
-      result.stdout = drainReader(outReader, 16000);
-      result.stderr = drainReader(errReader, 16000);
+      result.stdout = readTextFile(outFile);
+      result.stderr = readTextFile(errFile);
       result.ok = finished && result.exitCode === 0;
     } catch (e) {
       result.error = String(e);
+    } finally {
+      try { if (outFile !== null) { Files.deleteIfExists(outFile.toPath()); } } catch (_ignoreCommandOutDelete) {}
+      try { if (errFile !== null) { Files.deleteIfExists(errFile.toPath()); } } catch (_ignoreCommandErrDelete) {}
     }
     result.durationMs = now() - startedAt;
     return result;
@@ -4512,6 +4609,8 @@
       ok: false,
       error: ""
     };
+    var outFile = null;
+    var errFile = null;
     try {
       applyEngineProxyEnvironment(pb.environment(), options && options.proxyTargetUrl);
       if (options && options.cwd) {
@@ -4520,20 +4619,30 @@
       if (options && options.env) {
         envObjectToMap(pb.environment(), options.env);
       }
+      outFile = File.createTempFile("c8o-agent-bridge-out-", ".log");
+      errFile = File.createTempFile("c8o-agent-bridge-err-", ".log");
+      pb.redirectOutput(outFile);
+      pb.redirectError(errFile);
       var process = pb.start();
-      var outReader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
-      var errReader = new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8));
       var finished = process.waitFor(options && options.timeoutMs ? options.timeoutMs : 15000, TimeUnit.MILLISECONDS);
       if (!finished) {
         process.destroyForcibly();
+        try { process.waitFor(2, TimeUnit.SECONDS); } catch (_ignoreProcessBuilderDestroyedWait) {}
         result.error = "timeout";
       }
-      result.exitCode = process.exitValue();
-      result.stdout = drainReader(outReader, 16000);
-      result.stderr = drainReader(errReader, 16000);
-      result.ok = result.exitCode === 0;
+      try {
+        result.exitCode = process.exitValue();
+      } catch (_ignoreProcessBuilderExitValue) {
+        result.exitCode = -1;
+      }
+      result.stdout = readTextFile(outFile);
+      result.stderr = readTextFile(errFile);
+      result.ok = finished && result.exitCode === 0;
     } catch (e) {
       result.error = String(e);
+    } finally {
+      try { if (outFile !== null) { Files.deleteIfExists(outFile.toPath()); } } catch (_ignoreProcessBuilderOutDelete) {}
+      try { if (errFile !== null) { Files.deleteIfExists(errFile.toPath()); } } catch (_ignoreProcessBuilderErrDelete) {}
     }
     result.durationMs = now() - startedAt;
     return result;
@@ -5346,20 +5455,6 @@
     }
   }
 
-  function drainReader(reader, maxChars) {
-    var sb = new java.lang.StringBuilder();
-    var line;
-    while ((line = reader.readLine()) !== null) {
-      if (sb.length() < maxChars) {
-        if (sb.length() > 0) {
-          sb.append("\n");
-        }
-        sb.append(line);
-      }
-    }
-    return String(sb.toString());
-  }
-
   function firstWorkingCommand(candidates, versionArgs, extraPath) {
     var attempts = [];
     for (var i = 0; i < candidates.length; i++) {
@@ -5602,6 +5697,18 @@
         outputPrice: "7.5"
       };
     }
+    if (lower === "zai-glm-5-2" || lower === "glm-5-2") {
+      return {
+        activeModel: "glm-5-2",
+        name: "zai-glm-5-2",
+        alias: "glm-5-2",
+        thinking: "high",
+        temperature: "1.0",
+        inputPrice: "1.4",
+        outputPrice: "4.4",
+        builtIn: true
+      };
+    }
     return {
       activeModel: model,
       name: model,
@@ -5613,74 +5720,46 @@
     };
   }
 
-  function managedVibeModelPresets() {
-    return [{
-      name: "zai-glm-5-2",
-      provider: "mistral",
-      alias: "zai-glm-5-2",
-      inputPrice: "1.4",
-      outputPrice: "4.4",
-      thinking: "high"
-    }];
-  }
-
-  function vibeConfigHasModel(text, preset) {
-    var blockPattern = /\[\[models\]\]([\s\S]*?)(?=\n\[\[|\n\[|$)/g;
-    var blockMatch;
-    while ((blockMatch = blockPattern.exec(String(text || ""))) !== null) {
-      var block = blockMatch[1];
-      if (parseTomlValue(block, "name") === preset.name || parseTomlValue(block, "alias") === preset.alias) {
-        return true;
+  function migrateManagedVibeModelPresets(text) {
+    var removed = [];
+    var result = String(text || "").replace(/(^|\n)\[\[models\]\]([\s\S]*?)(?=\n\[\[|\n\[|$)/g, function (match, prefix, block) {
+      var managed = parseTomlValue(block, "name") === "zai-glm-5-2"
+        && parseTomlValue(block, "alias") === "zai-glm-5-2"
+        && parseTomlValue(block, "provider") === "mistral"
+        && parseTomlValue(block, "input_price") === "1.4"
+        && parseTomlValue(block, "output_price") === "4.4"
+        && parseTomlValue(block, "thinking") === "high";
+      if (!managed) {
+        return match;
       }
-    }
-    return false;
-  }
-
-  function appendManagedVibeModelPresets(text) {
-    var result = String(text || "");
-    var presets = managedVibeModelPresets();
-    var added = [];
-    for (var i = 0; i < presets.length; i++) {
-      var preset = presets[i];
-      if (vibeConfigHasModel(result, preset)) {
-        continue;
-      }
-      var block = [
-        "[[models]]",
-        'name = "' + tomlString(preset.name) + '"',
-        'provider = "' + tomlString(preset.provider) + '"',
-        'alias = "' + tomlString(preset.alias) + '"',
-        "input_price = " + preset.inputPrice,
-        "output_price = " + preset.outputPrice,
-        'thinking = "' + tomlString(preset.thinking) + '"',
-        ""
-      ].join("\n");
-      var mcpIndex = result.indexOf("\n[[mcp_servers]]");
-      if (mcpIndex >= 0) {
-        result = result.substring(0, mcpIndex + 1) + block + "\n" + result.substring(mcpIndex + 1);
-      } else {
-        result = result.replace(/\s*$/, "\n\n") + block;
-      }
-      added.push(preset.alias);
+      removed.push("zai-glm-5-2");
+      return prefix;
+    });
+    var migratedActiveModel = false;
+    if (removed.length && /^\s*active_model\s*=\s*["']zai-glm-5-2["']/m.test(result)) {
+      result = result.replace(/^(\s*active_model\s*=\s*["'])zai-glm-5-2(["'])/m, "$1glm-5-2$2");
+      migratedActiveModel = true;
     }
     return {
-      text: result,
-      added: added
+      text: result.replace(/\n{3,}/g, "\n\n"),
+      removed: removed,
+      migratedActiveModel: migratedActiveModel
     };
   }
 
-  function ensureManagedVibeModelPresets(vibeHome) {
+  function migrateManagedVibeConfig(vibeHome) {
     var configFile = new File(vibeHome, "config.toml");
     if (!configFile.isFile()) {
-      return { path: filePath(configFile), added: [] };
+      return { path: filePath(configFile), removed: [], migratedActiveModel: false };
     }
-    var patched = appendManagedVibeModelPresets(readTextFile(configFile));
-    if (patched.added.length) {
+    var patched = migrateManagedVibeModelPresets(readTextFile(configFile));
+    if (patched.removed.length) {
       writeTextFile(configFile, patched.text);
     }
     return {
       path: filePath(configFile),
-      added: patched.added
+      removed: patched.removed,
+      migratedActiveModel: patched.migratedActiveModel
     };
   }
 
@@ -5708,24 +5787,30 @@
       'region = ""',
       '',
       '[providers.extra_headers]',
-      '',
-      '[[models]]',
-      'name = "' + tomlString(spec.name) + '"',
-      'provider = "mistral"',
-      'alias = "' + tomlString(spec.alias) + '"',
-      'temperature = ' + spec.temperature,
-      'input_price = ' + spec.inputPrice,
-      'output_price = ' + spec.outputPrice,
-      spec.thinking.length ? 'thinking = "' + tomlString(spec.thinking) + '"' : '',
-      'auto_compact_threshold = 200000',
-      '',
+      ''
+    ];
+    if (spec.builtIn !== true) {
+      lines.push(
+        '[[models]]',
+        'name = "' + tomlString(spec.name) + '"',
+        'provider = "mistral"',
+        'alias = "' + tomlString(spec.alias) + '"',
+        'temperature = ' + spec.temperature,
+        'input_price = ' + spec.inputPrice,
+        'output_price = ' + spec.outputPrice,
+        spec.thinking.length ? 'thinking = "' + tomlString(spec.thinking) + '"' : '',
+        'auto_compact_threshold = 200000',
+        ''
+      );
+    }
+    lines.push(
       '[[mcp_servers]]',
       'name = "Convertigo"',
       'transport = "http"',
       'url = "' + tomlString(vibeMcpTransportEndpoint(mcpEndpoint)) + '"',
       'startup_timeout_sec = 60.0',
       ''
-    ];
+    );
     if (usesProtectedConvertigoMcp(mcpEndpoint, options)) {
       lines.push(
         '[mcp_servers.auth]',
@@ -5737,7 +5822,6 @@
       );
     }
     var text = lines.join("\n");
-    text = appendManagedVibeModelPresets(text).text;
     return {
       path: filePath(configFile),
       model: spec.activeModel,
@@ -6685,11 +6769,12 @@
     provider.settingsCacheKey = providerSettingsCacheKey("vibe", setup.vibeHome);
     provider = hydrateProviderSettingsFromCache(setup.workspaceRoot, provider, true);
     if (!boolValue(options.runtimePresenceOnly, false) && managedVibeReady && commandPathStartsWith({ path: setup.vibeHome }, setup.installDir)) {
-      var presetUpdate = ensureManagedVibeModelPresets(setup.vibeHome);
-      if (presetUpdate.added.length) {
+      var presetUpdate = migrateManagedVibeConfig(setup.vibeHome);
+      if (presetUpdate.removed.length) {
         provider.source = provider.source || {};
         provider.source.settingsCachedAt = 0;
-        provider.source.modelPresetsAdded = presetUpdate.added;
+        provider.source.modelPresetsRemoved = presetUpdate.removed;
+        provider.source.activeModelMigrated = presetUpdate.migratedActiveModel;
       }
     }
     return provider;
@@ -7925,12 +8010,21 @@
     return waitForPending(entry, pending, timeoutMs, true);
   }
 
-  function buildMcpServers(mcpEndpoint) {
+  function buildMcpServers(mcpEndpoint, options) {
+    options = options || {};
+    var headers = [];
+    var bearerToken = managedMcpBearerToken(options);
+    if (usesProtectedConvertigoMcp(mcpEndpoint, options) && bearerToken.length) {
+      headers.push({
+        name: "Authorization",
+        value: "Bearer " + bearerToken
+      });
+    }
     return [{
       type: "http",
       name: "Convertigo",
       url: vibeMcpTransportEndpoint(mcpEndpoint),
-      headers: []
+      headers: headers
     }];
   }
 

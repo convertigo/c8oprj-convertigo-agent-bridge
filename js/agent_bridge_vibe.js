@@ -5,7 +5,11 @@
     var install = boolValue(options.install, false);
     var forceVibeInstall = boolValue(options.forceVibeInstall || options.forceInstall || options.force, false);
     var configure = boolValue(options.configure, false);
-    var setup = detectRuntime(options);
+    var startupPresenceOnly = boolValue(options.startupPresenceOnly, false) && !install;
+    var detectSetup = function () {
+      return startupPresenceOnly ? detectRuntimePresence(options) : detectRuntime(options);
+    };
+    var setup = detectSetup();
     var workspaceFirstOption = typeof options.workspaceInstallFirst !== "undefined" ? options.workspaceInstallFirst : options.preferWorkspaceInstall;
     var workspaceFirst = boolValue(typeof workspaceFirstOption === "undefined" ? true : workspaceFirstOption, true);
     var installation = {
@@ -46,9 +50,9 @@
           var written = writeLocalVibeConfig(setup.vibeHome, setup.mcpEndpoint, options.model || options.agentModel, options);
           messages.push("Local VIBE_HOME config written: " + written.path + " (" + written.model + ")");
         }
-        var presets = ensureManagedVibeModelPresets(setup.vibeHome);
-        if (presets.added.length) {
-          messages.push("Managed Vibe model presets added: " + presets.added.join(", "));
+        var presetMigration = migrateManagedVibeConfig(setup.vibeHome);
+        if (presetMigration.removed.length) {
+          messages.push("Legacy managed Vibe model preset migrated: " + presetMigration.removed.join(", "));
         }
       }
       bootstrap = bootstrapVibeHome(setup.vibeHome);
@@ -111,7 +115,7 @@
       }
     } catch (e) {
       messages.push(String(e));
-      setup = detectRuntime(options);
+      setup = detectSetup();
       if (!workspaceFirst && setup.vibe.found && setup.vibeAcp.found && !forceVibeInstall) {
         messages.push("Workspace Vibe install failed; using user PATH fallback.");
         installation.error = String(e);
@@ -123,13 +127,15 @@
           messages.push(fallbackSkills.error);
         }
         var fallbackAuthentication = inspectVibeAuthentication(setup.vibeHome);
-        var fallbackReady = fallbackAuthentication.configured === true;
+        var fallbackReady = fallbackAuthentication.configured === true && fallbackSkills.ok !== false;
         if (!fallbackReady) {
-          messages.push("Vibe authentication is required. Configure MISTRAL_API_KEY in the Vibe profile.");
+          messages.push(fallbackAuthentication.configured === true
+            ? "Vibe skill configuration is required before start."
+            : "Vibe authentication is required. Configure MISTRAL_API_KEY in the Vibe profile.");
         }
         return {
           ok: fallbackReady,
-          status: fallbackReady ? "ready" : "authentication_required",
+          status: fallbackReady ? "ready" : (fallbackSkills.ok === false ? "configuration_error" : "authentication_required"),
           phase: "fallback",
           setup: setup,
           authentication: fallbackAuthentication,
@@ -153,16 +159,22 @@
       };
     }
 
-    setup = detectRuntime(options);
+    if (installation.installed !== true) {
+      setup = detectSetup();
+    }
     var runtimeReady = setup.vibe.found && setup.vibeAcp.found && (!workspaceFirst || (
       commandPathStartsWith(setup.vibe, setup.venvDir) && commandPathStartsWith(setup.vibeAcp, setup.venvDir)
     ));
     var authentication = inspectVibeAuthentication(setup.vibeHome);
-    var ready = runtimeReady && authentication.configured === true;
-    if (runtimeReady && !ready) {
+    var skills = installAgentSkills(options, "vibe", setup.vibeHome);
+    var skillsReady = skills.ok !== false;
+    var ready = runtimeReady && authentication.configured === true && skillsReady;
+    if (runtimeReady && authentication.configured !== true) {
       messages.push("Vibe authentication is required. Configure MISTRAL_API_KEY in the Vibe profile.");
     }
-    var skills = installAgentSkills(options, "vibe", setup.vibeHome);
+    if (!skillsReady) {
+      messages.push(skills.error || "Vibe skill configuration is required before start.");
+    }
     if (!setup.config.selected.valid) {
       messages.push("Selected VIBE_HOME has no valid Convertigo MCP HTTP server config yet");
     }
@@ -174,7 +186,7 @@
     }
     return {
       ok: ready,
-      status: ready ? "ready" : (runtimeReady ? "authentication_required" : "missing"),
+      status: ready ? "ready" : (!skillsReady ? "configuration_error" : (runtimeReady ? "authentication_required" : "missing")),
       setup: setup,
       authentication: authentication,
       installation: installation,
@@ -299,7 +311,8 @@
       agentProfile: options.agentProfile,
       skillProfile: options.skillProfile,
       assistantContext: options.assistantContext,
-      configure: autoConfigure
+      configure: autoConfigure,
+      startupPresenceOnly: true
     });
     if (!setup.ok) {
       var authenticationRequired = setup.status === "authentication_required";
@@ -307,7 +320,7 @@
         ok: false,
         status: authenticationRequired ? "authentication_required" : "error",
         phase: "setup",
-        error: authenticationRequired ? "Vibe authentication is required before start" : "vibe and vibe-acp are required before start",
+        error: authenticationRequired ? "Vibe authentication is required before start" : (setup.error || (setup.skills && setup.skills.error) || "Vibe local setup is required before start"),
         setup: setup,
         timestamp: now()
       };
@@ -376,7 +389,7 @@
       entry.phase = "session/new";
       entry.session = acpRequest(entry, "session/new", {
         cwd: cwd,
-        mcpServers: buildMcpServers(mcpEndpoint)
+        mcpServers: buildMcpServers(mcpEndpoint, options)
       }, timeoutMs);
       entry.sessionId = String(entry.session.sessionId || entry.session.session_id || "");
       var sessionProvider = vibeSettings({

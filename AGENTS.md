@@ -203,9 +203,13 @@ same context.
   `session/set_config_option` after `session/new`. The remote Vibe catalog can
   also contain account-routed models that are not present in the initial static
   TOML file.
-- Keep the managed `zai-glm-5-2` preset idempotently present in generated Vibe
-  configs. Vibe does not add every API model to the ACP picker automatically;
-  configured presets are part of the session catalog.
+- Use Vibe's native `glm-5-2` model and migrate the former managed
+  `zai-glm-5-2` preset without touching user-defined model presets.
+- Synchronize generalist Vibe guidance through
+  `lib_ConvertigoMCP._setupVibe`. The generated entry point is
+  `skills/convertigo-vibe-generalist/SKILL.md`; never copy or direct the agent
+  to the MCP repository's root `AGENT.md` or `TOOLS.md`, which are maintainer
+  documentation.
 - In NoCode/C8Oforms contexts, Vibe should resolve home scope by user, not by
   conversation, unless the caller explicitly overrides the scope.
 - Do not add project names into the filesystem path for Codex/Vibe homes.

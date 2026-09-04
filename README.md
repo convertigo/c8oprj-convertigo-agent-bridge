@@ -189,8 +189,8 @@ Le bootstrap Vibe fait :
    raisonnement sont exposes a l'Assistant et caches par `VIBE_HOME` pendant
    six heures. Un modele choisi est applique au process vivant avec
    `session/set_config_option`, sans regenerer une definition TOML approximative.
-8. Ajout idempotent du preset `zai-glm-5-2` dans le `config.toml` gere. Vibe
-   l'expose alors dans son catalogue ACP avec les tarifs publics Mistral.
+8. Utilisation du modele GLM 5.2 natif de Vibe (`glm-5-2`) et migration de
+   l'ancien preset gere `zai-glm-5-2` pour eviter les doublons.
 
 Vibe charge aussi sa config `config.toml`; le champ ACP `mcpServers` seul ne
 suffit pas. Le setup local configure donc explicitement le MCP dans le

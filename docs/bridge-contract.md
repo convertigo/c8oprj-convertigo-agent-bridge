@@ -270,8 +270,10 @@ Validation faite le 2026-06-15 via HTTP `localhost:18082` :
 - Le resultat `session/new.configOptions` alimente le catalogue de modeles et
   niveaux de raisonnement du provider Vibe; les changements sont appliques par
   `session/set_config_option` et caches par `VIBE_HOME`.
-- Le setup des homes geres ajoute de facon idempotente le preset
-  `zai-glm-5-2`, afin que Vibe l'inclue dans `configOptions`.
+- Le setup des homes geres utilise `glm-5-2` fourni nativement par Vibe.
+  L'ancien preset gere
+  `zai-glm-5-2` est retire lors de la migration pour eviter un doublon dans
+  `configOptions`.
 - Un home explicite isole sous `agents/vibe/homes/test-explicit/.vibe-home`
   valide aussi le handshake ACP.
 - `agent_events` retourne les evenements initiaux du process Vibe ACP.
