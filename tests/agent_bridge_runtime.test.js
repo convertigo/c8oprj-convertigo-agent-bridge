@@ -199,6 +199,37 @@ assert.match(vibeSource, /buildMcpServers\(mcpEndpoint, options\)/);
 assert.match(vibeSource, /status: ready \? "ready" : \(!skillsReady \? "configuration_error"/);
 assert.match(commonSource, /callLocalSequence\(setupProject, "_setupVibe"/);
 assert.match(commonSource, /skills\/convertigo-vibe-generalist\/SKILL\.md/);
+assert.match(commonSource, /invalidatePersistentProviderSettingsCache/);
+assert.match(commonSource, /vibeConfigRequiresAuthMigration/);
+assert.equal(vibeConfigRequiresAuthMigration([
+  "[[mcp_servers]]",
+  'name = "Convertigo"',
+  "",
+  "[mcp_servers.headers]",
+  'X-Test = "value"',
+  "",
+  "[mcp_servers.auth]",
+  'type = "static"'
+].join("\n")), true);
+assert.equal(vibeConfigRequiresAuthMigration([
+  "[[mcp_servers]]",
+  'name = "Convertigo"',
+  "",
+  "[mcp_servers.auth]",
+  'type = "static"',
+  'headers = { X-Test = "value" }'
+].join("\n")), false);
+assert.equal(vibeConfigRequiresAuthMigration([
+  "[[mcp_servers]]",
+  'name = "Other"',
+  "[mcp_servers.headers]",
+  'X-Test = "value"',
+  "",
+  "[[mcp_servers]]",
+  'name = "Convertigo"',
+  "[mcp_servers.auth]",
+  'type = "static"'
+].join("\n")), false);
 const setupVibeResult = findSetupVibeResult({
   document: {
     setupVibeResult: {

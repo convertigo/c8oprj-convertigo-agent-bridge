@@ -1120,6 +1120,7 @@
       skillStatus: "",
       agentsStatus: "",
       configStatus: "",
+      settingsCacheInvalidated: false,
       resolvedVibeHome: filePath(vibeHome),
       resolvedMcpUrl: trim(mcpEndpoint) || resolveMcpEndpoint(options),
       skillPath: "",
@@ -1153,6 +1154,13 @@
       report.resolvedMcpUrl = trim(result.resolvedMcpUrl) || report.resolvedMcpUrl;
       report.skillPath = trim(result.skillPath);
       report.target = report.resolvedVibeHome;
+      if (report.configStatus !== "unchanged") {
+        report.settingsCacheInvalidated = invalidatePersistentProviderSettingsCache(
+          resolveWorkspaceRoot(options || {}),
+          "vibe",
+          providerSettingsCacheKey("vibe", report.resolvedVibeHome)
+        );
+      }
       if (result.warnings && typeof result.warnings.length !== "undefined") {
         for (var i = 0; i < result.warnings.length; i++) {
           var warning = trim(result.warnings[i]);
@@ -4281,6 +4289,39 @@
     }
   }
 
+  function invalidatePersistentProviderSettingsCache(workspaceRoot, providerId, cacheKey) {
+    var persistent = readPersistentRuntimeUpdateCache(workspaceRoot);
+    if (persistent.file === null) {
+      return false;
+    }
+    var lock = null;
+    try {
+      lock = acquireFileLock(new File(persistent.file.getParentFile(), RUNTIME_UPDATE_CACHE_FILE + ".lock"), 5000);
+      persistent = readPersistentRuntimeUpdateCache(workspaceRoot);
+      var removed = false;
+      var key = trim(cacheKey) || normalizeProvider(providerId);
+      if (Object.prototype.hasOwnProperty.call(persistent.value.providers, key)) {
+        delete persistent.value.providers[key];
+        removed = true;
+      }
+      var legacyKey = normalizeProvider(providerId);
+      if (key !== legacyKey && Object.prototype.hasOwnProperty.call(persistent.value.providers, legacyKey)) {
+        delete persistent.value.providers[legacyKey];
+        removed = true;
+      }
+      if (removed) {
+        writeTextFile(persistent.file, JSON.stringify(persistent.value, null, 2) + "\n");
+      }
+      return removed;
+    } catch (_ignorePersistentProviderSettingsCacheInvalidation) {
+      return false;
+    } finally {
+      if (lock !== null) {
+        lock.release();
+      }
+    }
+  }
+
   function hydrateProviderSettingsFromCache(workspaceRoot, provider, preferCached) {
     provider = provider || {};
     if (!preferCached && provider.models && provider.models.length) {
@@ -6552,6 +6593,45 @@
     return result;
   }
 
+  function vibeConfigRequiresAuthMigration(text) {
+    var lines = String(text || "").split(/\r?\n/);
+    for (var i = 0; i < lines.length; i++) {
+      if (trim(lines[i]) !== "[[mcp_servers]]") {
+        continue;
+      }
+      var end = lines.length;
+      for (var endIndex = i + 1; endIndex < lines.length; endIndex++) {
+        var section = trim(lines[endIndex]);
+        var nestedMcpSection = section === "[mcp_servers.headers]" ||
+          section === "[mcp_servers.auth]" || section === "[mcp_servers.auth.headers]";
+        if (/^\[\[.+\]\]$/.test(section) || (/^\[.+\]$/.test(section) && !nestedMcpSection)) {
+          end = endIndex;
+          break;
+        }
+      }
+      var isConvertigo = false;
+      var hasAuth = false;
+      var hasLegacyHeaders = false;
+      var hasParentInlineHeaders = false;
+      var currentSection = "parent";
+      for (var lineIndex = i + 1; lineIndex < end; lineIndex++) {
+        var line = trim(lines[lineIndex]);
+        if (/^\[.+\]$/.test(line)) {
+          currentSection = line;
+          hasAuth = hasAuth || line === "[mcp_servers.auth]";
+          hasLegacyHeaders = hasLegacyHeaders || line === "[mcp_servers.headers]";
+        } else if (currentSection === "parent") {
+          isConvertigo = isConvertigo || /^name\s*=\s*["']Convertigo["']\s*$/.test(line);
+          hasParentInlineHeaders = hasParentInlineHeaders || /^headers\s*=/.test(line);
+        }
+      }
+      if (isConvertigo) {
+        return hasAuth && (hasLegacyHeaders || hasParentInlineHeaders);
+      }
+    }
+    return false;
+  }
+
   function acpConfigOptions(value) {
     value = value || {};
     var options = value.configOptions || value.config_options || value;
@@ -6717,12 +6797,21 @@
 
   function vibeSettings(options) {
     options = optionsWithRequestFallbacks(options);
+    var presenceOnly = boolValue(options.runtimePresenceOnly, false);
     var capabilityProfile = publicAgentCapabilityProfile(options);
     var profileSupported = capabilityProfile.supportedProviders.indexOf("vibe") >= 0;
-    var setup = boolValue(options.runtimePresenceOnly, false) ? detectRuntimePresence(options) : detectRuntime(options);
+    var setup = presenceOnly ? detectRuntimePresence(options) : detectRuntime(options);
     var managedVibeReady = commandPathStartsWith(setup.vibe, setup.venvDir) && commandPathStartsWith(setup.vibeAcp, setup.venvDir);
     var runtimeCommand = managedVibeReady ? setup.vibe : { found: false, path: "", version: "" };
     var runtime = runtimeUpdateStatus("vibe", runtimeCommand, vibeLatestVersion(options, setup), "pypi");
+    var skills = null;
+    if (!presenceOnly && managedVibeReady && trim(setup.vibeHome).length) {
+      var vibeConfigFile = new File(setup.vibeHome, "config.toml");
+      if (vibeConfigFile.isFile() && vibeConfigRequiresAuthMigration(readTextFile(vibeConfigFile))) {
+        skills = installAgentSkills(options, "vibe", setup.vibeHome);
+        setup = detectRuntime(options);
+      }
+    }
     var selectedFile = setup.vibeHome.length ? new File(setup.vibeHome, "config.toml") : null;
     var selected = selectedFile !== null ? parseVibeModelsFromConfig(selectedFile) : { path: "", exists: false, activeModel: "", models: [] };
     var user = parseVibeModelsFromConfig(new File(new File(String(System.getProperty("user.home")), ".vibe"), "config.toml"));
@@ -6754,6 +6843,7 @@
       runtime: runtime,
       authentication: inspectVibeAuthentication(setup.vibeHome),
       setup: compactVibeSetup(setup),
+      skills: skills,
       source: {
         type: config.exists ? "config" : "fallback",
         path: config.path,
@@ -6776,7 +6866,7 @@
     };
     provider.settingsCacheKey = providerSettingsCacheKey("vibe", setup.vibeHome);
     provider = hydrateProviderSettingsFromCache(setup.workspaceRoot, provider, true);
-    if (!boolValue(options.runtimePresenceOnly, false) && managedVibeReady && commandPathStartsWith({ path: setup.vibeHome }, setup.installDir)) {
+    if (!presenceOnly && managedVibeReady && commandPathStartsWith({ path: setup.vibeHome }, setup.installDir)) {
       var presetUpdate = migrateManagedVibeConfig(setup.vibeHome);
       if (presetUpdate.removed.length) {
         provider.source = provider.source || {};

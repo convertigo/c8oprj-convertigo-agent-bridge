@@ -203,6 +203,12 @@ same context.
   `session/set_config_option` after `session/new`. The remote Vibe catalog can
   also contain account-routed models that are not present in the initial static
   TOML file.
+- With Vibe 2.25 and later, MCP custom headers must live in the explicit
+  `[mcp_servers.auth]` block (for example as an inline `headers` map). A legacy
+  `[mcp_servers.headers]` table cannot coexist with explicit authentication.
+  Full settings discovery repairs this managed configuration through
+  `lib_ConvertigoMCP._setupVibe` and invalidates the cached model catalog before
+  starting ACP discovery.
 - Use Vibe's native `glm-5-2` model and migrate the former managed
   `zai-glm-5-2` preset without touching user-defined model presets.
 - Synchronize generalist Vibe guidance through
