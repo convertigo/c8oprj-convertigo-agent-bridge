@@ -143,7 +143,7 @@ same context.
   metadata, never home or history boundaries.
 - Treat Flow as an alpha capability, not as baseline Convertigo vocabulary.
   Expose its profile, prompts, skills, MCP entry, and setup requirements only
-  when the running engine is at least 8.4.0 and both `lib_flow_engine` and
+  when the running engine is at least 8.5.0 and both `lib_flow_engine` and
   `lib_flow_mcp` are loaded. Otherwise Studio setup and user-facing guidance
   must remain standard Convertigo-only and must not mention Flow.
 - Keep `assistantSurface` independent from authoring routing. A value such as

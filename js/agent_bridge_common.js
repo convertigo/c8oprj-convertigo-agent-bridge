@@ -20,7 +20,7 @@
   var MCP_GUIDANCE_VERSION = "2026-09-04.vibe-serial-transport-v1";
   var STUDIO_ROUTER_SKILL_SLUG = "convertigo-studio";
   var MANAGED_SKILL_BUNDLE_STATE_FILE = "managed-skill-bundle.json";
-  var FLOW_MINIMUM_CONVERTIGO_VERSION = "8.4.0";
+  var FLOW_MINIMUM_CONVERTIGO_VERSION = "8.5.0";
   var FLOW_REQUIRED_PROJECTS = ["lib_flow_engine", "lib_flow_mcp"];
   var flowCapabilityAvailabilityCache = null;
   var AGENT_CAPABILITY_PROFILES = {

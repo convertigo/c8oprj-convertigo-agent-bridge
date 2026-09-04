@@ -33,9 +33,9 @@ vm.runInThisContext(fs.readFileSync("js/agent_bridge_common.js", "utf8"), {
 assert.equal(agentCapabilityProfile({ userId: "studio", assistantSurface: "studio" }).id, "generalist");
 assert.equal(agentCapabilityProfile({ userId: "studio", assistantSurface: "studio", agentProfile: "flow" }).id, "generalist");
 assert.equal(agentCapabilityProfile({ userId: "alice", assistantSurface: "studio", agentProfile: "flow" }).id, "nocode");
-assert.equal(versionAtLeast("8.4.0", "8.4.0"), true);
-assert.equal(versionAtLeast("8.4.1-beta", "8.4.0"), true);
-assert.equal(versionAtLeast("8.3.9", "8.4.0"), false);
+assert.equal(versionAtLeast("8.5.0", "8.5.0"), true);
+assert.equal(versionAtLeast("8.5.1-beta", "8.5.0"), true);
+assert.equal(versionAtLeast("8.4.9", "8.5.0"), false);
 
 const router = buildConvertigoStudioRouterSkill();
 assert.doesNotMatch(router, /\bFlow\b|convertigo-flow/i);

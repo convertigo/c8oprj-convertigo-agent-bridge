@@ -101,7 +101,7 @@ conflicts by preserving generic bridge contracts first and keep Flow-specific
 knowledge in `lib_flow_mcp`.
 
 Flow is an alpha capability and is available only when the running Convertigo
-version is at least 8.4.0 and both `lib_flow_engine` and `lib_flow_mcp` are
+version is at least 8.5.0 and both `lib_flow_engine` and `lib_flow_mcp` are
 loaded. When either condition is false, public capability descriptors, managed
 setup output, prompts, skills, and MCP configuration must remain standard
 Convertigo-only and must not mention or require Flow.

@@ -255,7 +255,7 @@ detectCodexRuntime = originalDetectCodexRuntime;
 const originalEngineProductVersion = engineProductVersion;
 const originalProjectDirectoryByName = projectDirectoryByName;
 let flowProjectLookups = 0;
-engineProductVersion = () => "8.3.9";
+engineProductVersion = () => "8.4.9";
 projectDirectoryByName = () => {
   flowProjectLookups += 1;
   return null;
