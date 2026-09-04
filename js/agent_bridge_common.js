@@ -5235,7 +5235,7 @@
         timestamp: now()
       };
     }
-    var force = boolValue(options.forceCodexPlaywrightInstall || options.forcePlaywrightInstall || options.forceCodexInstall || options.forceInstall || options.force, false);
+    var force = boolValue(options.forceCodexPlaywrightInstall || options.forcePlaywrightInstall, false);
     if (before.found && !force) {
       return {
         attempted: false,
@@ -5282,11 +5282,19 @@
   }
 
   function runNpmInstall(npm, packageSpec, prefixDir, options, extraEnv) {
-    return runNpmCommand(npm, ["install", "--prefix", prefixDir, packageSpec], {
+    var startedAt = now();
+    try {
+      log.info("Agent Bridge npm installation started: " + packageSpec);
+    } catch (_ignoreNpmInstallStartLog) {}
+    var result = runNpmCommand(npm, ["install", "--no-audit", "--no-fund", "--prefix", prefixDir, packageSpec], {
       cwd: prefixDir,
       env: extraEnv || null,
       timeoutMs: intValue(options.codexInstallTimeoutMs || options.npmInstallTimeoutMs, 600000, 30000, 1800000)
     });
+    try {
+      log.info("Agent Bridge npm installation " + (result.ok ? "completed" : "failed") + ": " + packageSpec + " (" + (now() - startedAt) + " ms)");
+    } catch (_ignoreNpmInstallEndLog) {}
+    return result;
   }
 
   function runNpmCommand(npm, args, options) {

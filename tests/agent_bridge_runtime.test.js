@@ -49,6 +49,17 @@ assert.ok(
   commandSource[0].indexOf("pb.redirectOutput(outFile)") < commandSource[0].indexOf("process.waitFor("),
   "command output must be redirected before waiting"
 );
+const playwrightInstallSource = commonSource.match(/function ensureCodexPlaywrightRuntime\(options, installDir\) \{[\s\S]*?\n  \}/);
+assert.ok(playwrightInstallSource, "ensureCodexPlaywrightRuntime must remain present");
+assert.match(playwrightInstallSource[0], /options\.forceCodexPlaywrightInstall \|\| options\.forcePlaywrightInstall/);
+assert.doesNotMatch(
+  playwrightInstallSource[0],
+  /options\.forceCodexInstall|options\.forceInstall|options\.force,/,
+  "forcing a Codex CLI update must not reinstall an already usable Playwright MCP runtime"
+);
+assert.match(commonSource, /Agent Bridge npm installation started:/);
+assert.match(commonSource, /Agent Bridge npm installation .*completed/);
+assert.match(commonSource, /\["install", "--no-audit", "--no-fund", "--prefix", prefixDir, packageSpec\]/);
 
 const compactFailure = compactCommandResult({
   command: "python -m pip install mistral-vibe",
