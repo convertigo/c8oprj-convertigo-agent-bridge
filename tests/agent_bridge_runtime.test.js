@@ -315,7 +315,7 @@ assert.match(codexSource, /function recordCodexManagedSkillReads/);
 assert.doesNotMatch(
   codexSource,
   /!entry\.sessionId\.length[\s\S]{0,300}acknowledgeManagedSkillBundle/,
-  "a fresh conversation must acknowledge managed skills only after observed reads"
+  "fresh bundle baselining must remain explicit instead of piggybacking on a missing session id"
 );
 assert.match(codexSource, /reason: "skill_bundle_changed"/);
 assert.deepEqual(
@@ -326,6 +326,63 @@ assert.deepEqual(
   codexManagedSkillReadSlugs("cat C:\\codex-home\\skills\\convertigo-studio\\SKILL.md"),
   ["convertigo-studio"]
 );
+const originalAcknowledgeManagedSkillBundle = acknowledgeManagedSkillBundle;
+const originalPushEvent = pushEvent;
+let acknowledgedSkillBundle = null;
+acknowledgeManagedSkillBundle = (_homePath, bundle) => {
+  acknowledgedSkillBundle = bundle.fingerprint;
+  return true;
+};
+pushEvent = () => {};
+const splitSkillReadEntry = {
+  home: { path: "/tmp/codex-home" },
+  managedSkillBundle: {
+    ready: true,
+    fingerprint: "bundle-split-events",
+    acknowledgedFingerprint: "old-bundle",
+    refreshRequired: true,
+    pendingSlugs: ["convertigo-flow-frontend-svelte"],
+    skills: { "convertigo-flow-frontend-svelte": "hash" }
+  },
+  managedSkillBundleReadSlugs: {},
+  managedSkillBundleReadCalls: {}
+};
+assert.equal(handleCodexManagedSkillReadItem(splitSkillReadEntry, {
+  id: "skill-read-1",
+  type: "command_execution",
+  command: "sed -n '1,240p' /tmp/codex-home/skills/convertigo-flow-frontend-svelte/SKILL.md"
+}, false), true);
+assert.equal(handleCodexManagedSkillReadItem(splitSkillReadEntry, {
+  id: "skill-read-1",
+  type: "command_execution",
+  output: "skill content without its source path"
+}, true), true);
+assert.equal(acknowledgedSkillBundle, "bundle-split-events");
+assert.equal(splitSkillReadEntry.managedSkillBundle.refreshRequired, false);
+
+const freshSkillEntry = {
+  home: { path: "/tmp/codex-home" },
+  codexHasStartedTurn: false,
+  managedSkillBundle: {
+    ready: true,
+    fingerprint: "fresh-bundle",
+    acknowledgedFingerprint: "",
+    refreshRequired: true,
+    pendingSlugs: ["convertigo-studio", "convertigo-generalist"],
+    skills: { "convertigo-studio": "one", "convertigo-generalist": "two" }
+  }
+};
+assert.equal(baselineFreshCodexSkillBundle(freshSkillEntry), true);
+assert.equal(freshSkillEntry.managedSkillBundle.refreshRequired, false);
+assert.deepEqual(freshSkillEntry.managedSkillBundle.pendingSlugs, []);
+freshSkillEntry.codexHasStartedTurn = true;
+freshSkillEntry.managedSkillBundle.acknowledgedFingerprint = "";
+assert.equal(baselineFreshCodexSkillBundle(freshSkillEntry), false,
+  "a resumed conversation must still reread changed managed skills");
+acknowledgeManagedSkillBundle = originalAcknowledgeManagedSkillBundle;
+pushEvent = originalPushEvent;
+assert.match(codexSource, /C8O\.agentBridge\.sweepExpired\(\{\}\)/);
+assert.match(commonSource, /destroyPidTree\(Number\(entry\.pid\)\)/);
 
 assert.equal(
   managedMcpTransportEndpoint("http://localhost:18082/convertigo/api/mcp"),

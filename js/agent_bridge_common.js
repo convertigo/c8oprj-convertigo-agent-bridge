@@ -8270,14 +8270,22 @@
         entry.writer.close();
       }
     } catch (_ignoreWriterClose) {}
-    try {
-      if (entry.process !== null && processAlive(entry.process)) {
-        entry.process.destroy();
-        if (!entry.process.waitFor(2000, TimeUnit.MILLISECONDS)) {
-          entry.process.destroyForcibly();
+    var stoppedTree = false;
+    if (entry && entry.protocol === "codex-app-server" && Number(entry.pid || 0) > 0) {
+      try {
+        stoppedTree = destroyPidTree(Number(entry.pid));
+      } catch (_ignoreDestroyTree) {}
+    }
+    if (!stoppedTree) {
+      try {
+        if (entry.process !== null && processAlive(entry.process)) {
+          entry.process.destroy();
+          if (!entry.process.waitFor(2000, TimeUnit.MILLISECONDS)) {
+            entry.process.destroyForcibly();
+          }
         }
-      }
-    } catch (_ignoreDestroy) {}
+      } catch (_ignoreDestroy) {}
+    }
     deleteEntryPidFile(entry);
     entry.status = entry.status === "error" ? "error" : "closed";
     entry.closedAt = entry.closedAt || now();

@@ -299,11 +299,32 @@
     return result.sort();
   }
 
-  function recordCodexManagedSkillReads(entry, item) {
+  function codexItemCallId(item) {
+    item = item || {};
+    return trim(item.call_id || item.callId || item.id);
+  }
+
+  function managedSkillReadSlugsForItem(entry, item) {
+    var slugs = codexManagedSkillReadSlugsFromItem(item);
+    var callId = codexItemCallId(item);
+    if (entry) {
+      entry.managedSkillBundleReadCalls = entry.managedSkillBundleReadCalls || {};
+      if (slugs.length && callId.length) {
+        entry.managedSkillBundleReadCalls[callId] = slugs.slice(0);
+      } else if (!slugs.length && callId.length && entry.managedSkillBundleReadCalls[callId]) {
+        slugs = entry.managedSkillBundleReadCalls[callId].slice(0);
+      }
+    }
+    return slugs;
+  }
+
+  function recordCodexManagedSkillReads(entry, item, observedSlugs) {
     if (!entry || !entry.managedSkillBundle || entry.managedSkillBundle.refreshRequired !== true) {
       return;
     }
-    var slugs = codexManagedSkillReadSlugsFromItem(item);
+    var slugs = observedSlugs && observedSlugs.length
+      ? observedSlugs.slice(0)
+      : managedSkillReadSlugsForItem(entry, item);
     entry.managedSkillBundleReadSlugs = entry.managedSkillBundleReadSlugs || {};
     for (var i = 0; i < slugs.length; i++) {
       entry.managedSkillBundleReadSlugs[slugs[i]] = true;
@@ -325,6 +346,37 @@
         skills: slugs
       });
     }
+  }
+
+  function handleCodexManagedSkillReadItem(entry, item, completed) {
+    var slugs = managedSkillReadSlugsForItem(entry, item);
+    if (!slugs.length) {
+      return false;
+    }
+    if (completed === true) {
+      recordCodexManagedSkillReads(entry, item, slugs);
+      var callId = codexItemCallId(item);
+      if (callId.length && entry && entry.managedSkillBundleReadCalls) {
+        delete entry.managedSkillBundleReadCalls[callId];
+      }
+    }
+    return true;
+  }
+
+  function baselineFreshCodexSkillBundle(entry) {
+    var bundle = entry && entry.managedSkillBundle;
+    if (!entry || entry.codexHasStartedTurn === true || !bundle || bundle.ready !== true ||
+        trim(bundle.acknowledgedFingerprint).length || !trim(bundle.fingerprint).length) {
+      return false;
+    }
+    if (!acknowledgeManagedSkillBundle(entry.home && entry.home.path, bundle)) {
+      return false;
+    }
+    bundle.acknowledgedFingerprint = bundle.fingerprint;
+    bundle.acknowledgedAt = now();
+    bundle.refreshRequired = false;
+    bundle.pendingSlugs = [];
+    return true;
   }
 
   function codexToolNameFromPayload(payload) {
@@ -381,6 +433,9 @@
     var payload = message.payload || {};
     var payloadType = String(payload.type || "");
     if (payloadType === "function_call" || payloadType === "tool_search_call") {
+      if (handleCodexManagedSkillReadItem(entry, payload, false)) {
+        return true;
+      }
       pushEvent(entry, "tool/start", {
         title: codexToolTitleFromInvocation(payload) || payload.name || payloadType,
         toolName: codexToolNameFromPayload(payload),
@@ -393,6 +448,9 @@
       return true;
     }
     if (payloadType === "function_call_output" || payloadType === "tool_search_output") {
+      if (handleCodexManagedSkillReadItem(entry, payload, true)) {
+        return true;
+      }
       pushEvent(entry, "tool/update", {
         title: payload.name || "",
         toolName: codexToolNameFromPayload(payload),
@@ -553,10 +611,7 @@
         return;
       }
       if (isCodexToolItem(itemType)) {
-        if (isCodexManagedSkillReadItem(item)) {
-          if (type === "item.completed") {
-            recordCodexManagedSkillReads(entry, item);
-          }
+        if (handleCodexManagedSkillReadItem(entry, item, type === "item.completed")) {
           return;
         }
         pushEvent(entry, type === "item.started" ? "tool/start" : "tool/update", {
@@ -1959,6 +2014,9 @@
     var operationStartedAt = now();
     options = optionsWithRequestFallbacks(options || {});
     try {
+      C8O.agentBridge.sweepExpired({});
+    } catch (_ignoreStartSweep) {}
+    try {
       ensureManagedViewerDebugPort(options);
     } catch (viewerDebugPortError) {
       return {
@@ -2160,6 +2218,14 @@
       : managedSkillBundleState(options, setup.setup.codexHome || (setup.setup.home && setup.setup.home.path));
     entry.managedSkillBundleFingerprint = trim(entry.managedSkillBundle && entry.managedSkillBundle.fingerprint);
     entry.managedSkillBundleReadSlugs = {};
+    entry.managedSkillBundleReadCalls = {};
+    if (baselineFreshCodexSkillBundle(entry)) {
+      pushEvent(entry, "guidance/baselined", {
+        provider: "codex",
+        fingerprint: entry.managedSkillBundle.fingerprint,
+        reason: "fresh_conversation"
+      });
+    }
     registry.put(handle, entry);
     var appServerStartedAt = 0;
     var appServerReadyAt = 0;
@@ -2350,6 +2416,7 @@
           previousSkillBundleFingerprint !== latestSkillBundle.fingerprint;
         if (skillBundleChanged) {
           entry.managedSkillBundleReadSlugs = {};
+          entry.managedSkillBundleReadCalls = {};
           pushEvent(entry, "warning", {
             message: "The managed Convertigo skill bundle changed; restarting Codex before the next turn.",
             provider: "codex",
